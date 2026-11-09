@@ -6,7 +6,36 @@
   <meta name="theme-color" content="#f4f6fb">
   <meta name="description" content="轻清单——把目标拆成每月、每周、每天，自动同步到任务清单。">
   <title>轻清单 · 把目标拆成今天</title>
-  <link rel="stylesheet" href="styles.css?v=24">
+  <style>
+    html { background: #f4f6fb; }
+  </style>
+  <script>
+    (function () {
+      let dark = false;
+      try {
+        const raw = localStorage.getItem("qinglist.state.v1");
+        const settings = raw ? JSON.parse(raw).settings : null;
+        const mode =
+          settings && settings.themeMode
+            ? settings.themeMode
+            : settings && settings.darkMode
+              ? "dark"
+              : "system";
+        dark =
+          mode === "dark" ||
+          (mode === "system" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+      } catch (error) {
+        dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      }
+      const background = dark ? "#11151d" : "#f4f6fb";
+      document.documentElement.dataset.theme = dark ? "dark" : "light";
+      document.documentElement.style.background = background;
+      const themeColor = document.querySelector('meta[name="theme-color"]');
+      if (themeColor) themeColor.setAttribute("content", background);
+    })();
+  </script>
+  <link rel="stylesheet" href="styles.css?v=35">
 </head>
 <body>
   <div class="ambient ambient--one" aria-hidden="true"></div>
@@ -40,7 +69,7 @@
                 <h1 id="dayTitle">今天</h1>
                 <p class="day-sub" id="daySub">11月8日 星期六 · 3 项待办</p>
               </div>
-              <div class="progress-orbit" id="progressOrbit" style="--progress:25">
+              <div class="progress-orbit" id="progressOrbit" style="--progress:25" role="button" tabindex="0" aria-label="查看今日统计">
                 <div class="progress-orbit-inner">
                   <strong id="progressPercent">25%</strong>
                   <span>今日</span>
@@ -61,6 +90,7 @@
         </div>
 
         <div class="task-content">
+          <div id="overdueList" class="overdue-list" hidden></div>
           <div class="list-heading">
             <div class="list-heading-title">
               <h2>待办</h2>
@@ -68,7 +98,7 @@
             </div>
             <span class="longpress-hint">
               <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 11V6.5a1.5 1.5 0 013 0V11m0-1.5a1.5 1.5 0 013 0V12m0-1a1.5 1.5 0 013 0v4.2c0 3.2-2.1 5.3-5.3 5.3h-1.2c-2 0-3.2-.8-4.3-2.2L5.7 15a1.55 1.55 0 012.1-2.2L9 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              长按编辑
+              长按三点拖动
             </span>
           </div>
           <div id="taskList" class="task-list" aria-live="polite"></div>
@@ -128,6 +158,14 @@
           <h1>我的</h1>
           <p class="create-sub">看看进展，整理清单，管理数据。</p>
         </header>
+        <div class="global-search">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3" stroke="currentColor" stroke-width="1.8"/><path d="M15.5 15.5L20 20" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <input id="globalSearchInput" type="search" placeholder="搜索任务、目标、习惯、清单" autocomplete="off">
+          <button id="clearGlobalSearch" type="button" aria-label="清空搜索" hidden>
+            <svg viewBox="0 0 24 24" fill="none"><path d="M7 7l10 10M17 7L7 17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <div id="globalSearchResults" class="global-search-results" hidden></div>
         <div class="profile-menu">
           <button class="profile-menu-item" type="button" data-profile-action="stats">
             <span class="profile-menu-icon profile-menu-icon--stats" aria-hidden="true">
@@ -182,7 +220,7 @@
           <span class="subpage-head-spacer" aria-hidden="true"></span>
         </header>
         <div class="subpage-body">
-          <p class="subpage-intro">每天自动生成一条任务；完成情况请在任务清单里勾选。</p>
+          <p class="subpage-intro">按重复规则自动生成当天任务；完成情况请在任务清单里勾选。</p>
           <div id="habitList" class="habit-list" aria-live="polite"></div>
           <button class="add-task-row" type="button" id="addHabitPageBtn"><svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><span>新建习惯</span></button>
         </div>
@@ -205,6 +243,37 @@
           <button class="add-task-row" type="button" id="addListPageBtn"><svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><span>新建清单</span></button>
         </div>
       </section>
+
+      <!-- 清单详情 -->
+      <section class="page page--sub page--list-detail" id="page-list-detail" data-page="list-detail" aria-label="清单详情" hidden>
+        <header class="subpage-head">
+          <button class="round-close" type="button" id="listDetailBack" aria-label="返回清单">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M14.5 5.5L8 12l6.5 6.5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <h2 id="listDetailTitle">清单</h2>
+          <span class="subpage-head-spacer" aria-hidden="true"></span>
+        </header>
+        <div class="subpage-body">
+          <p class="subpage-intro" id="listDetailIntro">查看清单里的任务和子任务。</p>
+          <div class="list-detail-toolbar">
+            <button type="button" id="listSelectAll">全选</button>
+            <button type="button" id="listDeleteSelected" disabled>删除所选</button>
+          </div>
+          <div id="listDetailContent" class="list-detail-content"></div>
+        </div>
+      </section>
+
+      <!-- 新建目标 / 编辑目标 -->
+      <section class="page page--sub page--fullpage" id="page-goal" data-page="goal" aria-label="新建目标" hidden></section>
+
+      <!-- 统计 -->
+      <section class="page page--sub page--fullpage" id="page-stats" data-page="stats" aria-label="统计" hidden></section>
+
+      <!-- 数据 -->
+      <section class="page page--sub page--fullpage" id="page-data" data-page="data" aria-label="数据" hidden></section>
+
+      <!-- 设置 -->
+      <section class="page page--sub page--fullpage" id="page-settings" data-page="settings" aria-label="设置" hidden></section>
     </div>
 
     <nav class="tabbar" aria-label="主导航">
@@ -251,6 +320,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=24"></script>
+  <script src="app.js?v=35"></script>
 </body>
 </html>

@@ -12,6 +12,8 @@
     pink: { color: "#d65f91", bg: "#fff0f6", label: "粉" },
   };
   const LIST_COLOR_KEYS = Object.keys(LIST_COLOR_OPTIONS);
+  const HABIT_COLOR_KEYS = ["blue", "orange", "green", "purple", "cyan"];
+  const GOAL_COLOR_KEYS = ["blue", "orange", "green", "purple", "cyan"];
   const DEFAULT_LISTS = [
     { id: "list_work", name: "工作", color: "blue" },
     { id: "list_life", name: "生活", color: "orange" },
@@ -19,14 +21,18 @@
     { id: "list_health", name: "健康", color: "green" },
     { id: "list_goal", name: "目标", color: "cyan" },
   ];
-  const FONT_SCALE_DEFAULT = 1.06;
+  const FONT_SCALE_DEFAULT = 1.12;
   const FONT_SCALE_OPTIONS = [
-    { value: 1, label: "标准", hint: "紧凑" },
-    { value: 1.06, label: "大", hint: "默认" },
-    { value: 1.12, label: "特大", hint: "更大" },
+    { value: 1.06, label: "小紧凑", hint: "更小" },
+    { value: 1.12, label: "标准", hint: "默认" },
+    { value: 1.18, label: "特大", hint: "更大" },
   ];
   const DEFAULT_SETTINGS = {
     fontScale: FONT_SCALE_DEFAULT,
+    fontScaleRev: 2,
+    themeMode: "system",
+    darkMode: false,
+    subtasksEnabled: false,
   };
   const GOAL_COLORS = [
     ["#6e88ff", "#4563ec", "rgba(69, 99, 236, 0.24)"],
@@ -154,6 +160,37 @@
       ? value
       : FONT_SCALE_DEFAULT;
     document.documentElement.style.setProperty("--font-scale", String(scale));
+  }
+
+  function effectiveThemeIsDark() {
+    const mode = state.settings?.themeMode || "system";
+    if (mode === "system") {
+      return window.matchMedia("(prefers-color-scheme: dark)").matches;
+    }
+    return mode === "dark";
+  }
+
+  function applyTheme() {
+    const dark = effectiveThemeIsDark();
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    document.documentElement.style.colorScheme = dark ? "dark" : "light";
+    const statusBar = nativePlugins().StatusBar;
+    if (!statusBar) return;
+    Promise.resolve(
+      statusBar.setBackgroundColor({ color: dark ? "#11151d" : "#f4f6fb" })
+    ).catch(() => {});
+    Promise.resolve(
+      statusBar.setStyle({ style: dark ? "DARK" : "LIGHT" })
+    ).catch(() => {});
+  }
+
+  function setupThemeWatcher() {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    media.addEventListener?.("change", () => {
+      if ((state.settings?.themeMode || "system") === "system") {
+        applyTheme();
+      }
+    });
   }
 
   function findScrollParent(element) {
@@ -319,6 +356,19 @@
     return LIST_COLOR_OPTIONS[colorId] || LIST_COLOR_OPTIONS.blue;
   }
 
+  function randomHabitColor() {
+    return HABIT_COLOR_KEYS[Math.floor(Math.random() * HABIT_COLOR_KEYS.length)];
+  }
+
+  function stableHabitColor(id) {
+    const text = String(id || "");
+    let hash = 0;
+    for (let index = 0; index < text.length; index += 1) {
+      hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+    }
+    return HABIT_COLOR_KEYS[hash % HABIT_COLOR_KEYS.length];
+  }
+
   function listTagHTML(listId, extraClass = "") {
     const list = getList(listId);
     const color = listColorOption(list.color);
@@ -453,7 +503,9 @@
   }
 
   function openCalendarPicker(initialKey, onSelect, trigger, title = "选择日期") {
+    window.clearTimeout(calendarCloseTimer);
     calendarLayer.hidden = false;
+    calendarLayer.classList.remove("is-closing");
     calendarLayer.classList.add("is-open");
     calendarOpenTrigger = trigger || null;
     calendarSelectionHandler = onSelect || null;
@@ -470,15 +522,22 @@
   }
 
   function closeCalendarPicker() {
-    if (calendarLayer.hidden) return;
-    calendarLayer.hidden = true;
+    if (calendarLayer.hidden || calendarLayer.classList.contains("is-closing")) {
+      return;
+    }
     calendarLayer.classList.remove("is-open");
+    calendarLayer.classList.add("is-closing");
     if (calendarOpenTrigger) {
       calendarOpenTrigger.setAttribute("aria-expanded", "false");
       calendarOpenTrigger = null;
     }
     calendarSelectionHandler = null;
-    calendarHost.innerHTML = "";
+    window.clearTimeout(calendarCloseTimer);
+    calendarCloseTimer = window.setTimeout(() => {
+      calendarLayer.hidden = true;
+      calendarLayer.classList.remove("is-closing");
+      calendarHost.innerHTML = "";
+    }, 240);
   }
 
   // ---------- Persisted state ----------
@@ -567,7 +626,7 @@
     ];
 
     return {
-      tasks,
+      tasks: tasks.map((task) => ({ ...task, isSample: true })),
       goals: [],
       habits: [],
       habitSkips: [],
@@ -578,12 +637,27 @@
 
   function normalizeSettings(input) {
     const settings = { ...DEFAULT_SETTINGS };
-    const scale = Number(input?.fontScale);
-    settings.fontScale = FONT_SCALE_OPTIONS.some(
-      (option) => option.value === scale
-    )
-      ? scale
-      : FONT_SCALE_DEFAULT;
+    const rawScale = Number(input?.fontScale);
+    if (input?.fontScaleRev !== 2) {
+      const oldIndex = [1, 1.06, 1.12].indexOf(rawScale);
+      settings.fontScale =
+        oldIndex >= 0 ? [1.06, 1.12, 1.18][oldIndex] : FONT_SCALE_DEFAULT;
+      settings.fontScaleRev = 2;
+    } else {
+      settings.fontScale = FONT_SCALE_OPTIONS.some(
+        (option) => option.value === rawScale
+      )
+        ? rawScale
+        : FONT_SCALE_DEFAULT;
+      settings.fontScaleRev = 2;
+    }
+    settings.themeMode = ["system", "light", "dark"].includes(input?.themeMode)
+      ? input.themeMode
+      : input?.darkMode === true
+        ? "dark"
+        : "system";
+    settings.darkMode = settings.themeMode === "dark";
+    settings.subtasksEnabled = input?.subtasksEnabled === true;
     return settings;
   }
 
@@ -620,8 +694,21 @@
       .filter((task) => task && typeof task.title === "string" && task.date)
       .map((task) => {
         const { time, tag, ...rest } = task;
+        const subtasks = (Array.isArray(task.subtasks) ? task.subtasks : [])
+          .filter((item) => item && typeof item.title === "string")
+          .map((item) => ({
+            id: typeof item.id === "string" && item.id ? item.id : uid("subtask"),
+            title: item.title.trim().slice(0, 80),
+            done: item.done === true,
+          }))
+          .filter((item) => item.title);
         return {
           ...rest,
+          subtasks,
+          order:
+            typeof task.order === "number" && Number.isFinite(task.order)
+              ? task.order
+              : null,
           listId: validListIds.has(task.listId)
             ? task.listId
             : listByName.get(tag) || fallbackListId,
@@ -641,6 +728,20 @@
       .filter((habit) => habit && typeof habit.title === "string")
       .map((habit) => ({
         ...habit,
+        color: HABIT_COLOR_KEYS.includes(habit.color)
+          ? habit.color
+          : stableHabitColor(habit.id),
+        repeat: {
+          type: ["daily", "weekly"].includes(habit.repeat?.type)
+            ? habit.repeat.type
+            : "daily",
+          weekdays: Array.isArray(habit.repeat?.weekdays)
+            ? habit.repeat.weekdays.filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+            : [],
+          endDate: /^\d{4}-\d{2}-\d{2}$/.test(habit.repeat?.endDate || "")
+            ? habit.repeat.endDate
+            : "",
+        },
         listId: validListIds.has(habit.listId)
           ? habit.listId
           : fallbackListId,
@@ -703,6 +804,33 @@
     return `${habitId}:${dateKey}`;
   }
 
+  function habitRepeat(habit) {
+    return habit?.repeat || { type: "daily" };
+  }
+
+  function habitMatchesDate(habit, dateKey) {
+    const repeat = habitRepeat(habit);
+    if (repeat.endDate && dateKey > repeat.endDate) return false;
+    if (repeat.type === "weekly") {
+      const day = parseKey(dateKey).getDay();
+      return (repeat.weekdays || [day]).includes(day);
+    }
+    return true;
+  }
+
+  function habitRepeatLabel(habit) {
+    const repeat = habitRepeat(habit);
+    if (repeat.type === "weekly") {
+      const names = ["日", "一", "二", "三", "四", "五", "六"];
+      const days = [...(repeat.weekdays || [])]
+        .sort((a, b) => a - b)
+        .map((day) => `周${names[day]}`)
+        .join("、");
+      return days ? `每${days}` : "每周";
+    }
+    return "每天";
+  }
+
   function ensureHabitTasks(dateKey) {
     if (!state.habits?.length || !dateKey || dateKey < todayKey()) {
       return false;
@@ -710,6 +838,7 @@
     const skipped = new Set(state.habitSkips || []);
     let changed = false;
     state.habits.forEach((habit, index) => {
+      if (!habitMatchesDate(habit, dateKey)) return;
       if (skipped.has(habitSkipKey(habit.id, dateKey))) return;
       const exists = state.tasks.some(
         (task) => task.habitId === habit.id && task.date === dateKey
@@ -751,6 +880,77 @@
     return streak;
   }
 
+  function isSampleTask(task) {
+    return Boolean(
+      task &&
+        (task.isSample === true || /^seed_task_\d+$/.test(task.id || ""))
+    );
+  }
+
+  function overdueTasks() {
+    const today = todayKey();
+    if (ui.selectedDate < today) return [];
+    return state.tasks
+      .filter((task) => !task.done && task.date < today)
+      .sort(
+        (a, b) =>
+          a.date.localeCompare(b.date) ||
+          (a.createdAt || 0) - (b.createdAt || 0)
+      );
+  }
+
+  function renderOverdueTasks() {
+    if (!overdueList) return;
+    const tasks = overdueTasks();
+    if (!tasks.length) {
+      overdueList.hidden = true;
+      overdueList.innerHTML = "";
+      return;
+    }
+    overdueList.hidden = false;
+    overdueList.innerHTML = `<div class="overdue-head">
+      <div><span class="overdue-kicker">OVERDUE</span><strong>逾期 ${tasks.length} 项</strong></div>
+      <button type="button" data-overdue-all>全部移到今天</button>
+    </div>
+    <div class="overdue-items">
+      ${tasks
+        .map((task) => {
+          const list = getList(task.listId);
+          return `<div class="overdue-item" data-overdue-id="${task.id}">
+            <div class="overdue-copy">
+              <strong>${esc(task.title)}</strong>
+              <small>${formatShortDate(task.date)} · ${esc(list.name)}</small>
+            </div>
+            <button type="button" data-overdue-move="${task.id}">移到今天</button>
+          </div>`;
+        })
+        .join("")}
+    </div>`;
+  }
+
+  function moveOverdueTask(taskId) {
+    const task = state.tasks.find((item) => item.id === taskId);
+    if (!task) return;
+    task.date = todayKey();
+    saveState();
+    ui.expandedTaskId = null;
+    refreshTasksView({ animate: false });
+    showToast("已移到今天");
+  }
+
+  function moveAllOverdueTasks() {
+    const tasks = overdueTasks();
+    if (!tasks.length) return;
+    const today = todayKey();
+    tasks.forEach((task) => {
+      task.date = today;
+    });
+    saveState();
+    ui.expandedTaskId = null;
+    refreshTasksView({ animate: false });
+    showToast(`已移动 ${tasks.length} 项到今天我`);
+  }
+
   // ---------- UI state ----------
   const initialTab = ["tasks", "create", "profile"].includes(
     window.location.hash.replace("#", "")
@@ -763,6 +963,8 @@
     selectedDate: todayKey(),
     completedOpen: false,
     expandedTaskId: null,
+    activeListId: null,
+    listSelected: new Set(),
     rangeStart: addDaysKey(todayKey(), -45),
     rangeEnd: addDaysKey(todayKey(), 45),
   };
@@ -775,7 +977,9 @@
   let taskMorphState = null;
   let calendarOpenTrigger = null;
   let calendarSelectionHandler = null;
+  let calendarCloseTimer = 0;
   let suppressTaskClickUntil = 0;
+  let taskDragState = null;
 
   // ---------- DOM ----------
   const screen = document.querySelector("#screen");
@@ -783,12 +987,26 @@
   const sheet = document.querySelector("#sheet");
   const dateStrip = document.querySelector("#dateStrip");
   const taskList = document.querySelector("#taskList");
+  const overdueList = document.querySelector("#overdueList");
   const toast = document.querySelector("#toast");
   const goalList = document.querySelector("#goalList");
   const habitList = document.querySelector("#habitList");
+  const globalSearchInput = document.querySelector("#globalSearchInput");
+  const globalSearchResults = document.querySelector("#globalSearchResults");
+  const clearGlobalSearch = document.querySelector("#clearGlobalSearch");
   const habitsPage = document.querySelector("#page-habits");
   const listsPage = document.querySelector("#page-lists");
+  const listDetailPage = document.querySelector("#page-list-detail");
+  const goalPage = document.querySelector("#page-goal");
+  const statsPage = document.querySelector("#page-stats");
+  const dataPage = document.querySelector("#page-data");
+  const settingsPage = document.querySelector("#page-settings");
   const listManagerContent = document.querySelector("#listManagerContent");
+  const listDetailTitle = document.querySelector("#listDetailTitle");
+  const listDetailIntro = document.querySelector("#listDetailIntro");
+  const listDetailContent = document.querySelector("#listDetailContent");
+  const listSelectAll = document.querySelector("#listSelectAll");
+  const listDeleteSelected = document.querySelector("#listDeleteSelected");
   const calendarLayer = document.querySelector("#calendarLayer");
   const calendarHost = document.querySelector("#calendarHost");
   const calendarDialogTitle = document.querySelector("#calendarDialogTitle");
@@ -905,9 +1123,14 @@
   }
 
   function sortOpenTasks(tasks) {
-    return [...tasks].sort(
-      (a, b) => (a.createdAt || 0) - (b.createdAt || 0)
-    );
+    return [...tasks].sort((a, b) => {
+      const aOrder = Number.isFinite(a.order) ? a.order : null;
+      const bOrder = Number.isFinite(b.order) ? b.order : null;
+      if (aOrder !== null && bOrder !== null) return aOrder - bOrder;
+      if (aOrder !== null) return -1;
+      if (bOrder !== null) return 1;
+      return (a.createdAt || 0) - (b.createdAt || 0);
+    });
   }
 
   function sortDoneTasks(tasks) {
@@ -924,10 +1147,30 @@
     if (task.habitId) {
       parts.push(`<span class="tag tag--habit">每日</span>`);
     }
+    if (state.settings?.subtasksEnabled && task.subtasks?.length) {
+      const done = task.subtasks.filter((item) => item.done).length;
+      parts.push(
+        `<span class="meta-subtasks">${ICONS.check}<span>${done}/${task.subtasks.length}</span></span>`
+      );
+    }
     if (task.note) {
       parts.push(`<span class="meta-note" title="${esc(task.note)}">${ICONS.note}<span>备注</span></span>`);
     }
     return parts.join('<span class="meta-dot" aria-hidden="true"></span>');
+  }
+
+  function subtaskListHTML(task) {
+    if (!state.settings?.subtasksEnabled || !task.subtasks?.length) return "";
+    return `<div class="task-subtasks">
+      ${task.subtasks
+        .map(
+          (item) => `<button class="subtask-row ${item.done ? "is-done" : ""}" type="button" data-action="subtask-toggle" data-subtask-id="${item.id}" aria-pressed="${item.done}" ${task.done ? "disabled" : ""}>
+            <span class="subtask-check">${item.done ? ICONS.check : ""}</span>
+            <span class="subtask-title">${esc(item.title)}</span>
+          </button>`
+        )
+        .join("")}
+    </div>`;
   }
 
   function taskInlineDetailHTML(task, expanded) {
@@ -943,21 +1186,8 @@
             <span>任务详情</span>
             <button class="task-inline-close" type="button" data-action="collapse" aria-label="收起任务详情">${ICONS.close}</button>
           </div>
+          ${subtaskListHTML(task)}
           <div class="task-detail-note">${note}</div>
-          ${
-            task.done
-              ? `<p class="task-detail-locked">已完成任务不可编辑</p>`
-              : ""
-          }
-          <div class="goal-action-list task-detail-actions">
-            ${
-              task.done
-                ? ""
-                : `<button class="goal-action-item" type="button" data-action="edit">${ICONS.pen}<span>编辑任务</span></button>
-                   <button class="goal-action-item" type="button" data-action="postpone">${ICONS.calendarNext}<span>顺延到明天</span></button>`
-            }
-            <button class="goal-action-item goal-action-item--danger" type="button" data-action="delete">${ICONS.trash}<span>删除任务</span></button>
-          </div>
         </div>
       </div>
     </div>`;
@@ -966,12 +1196,9 @@
   function taskCardHTML(task, completed = false) {
     const meta = completed ? "" : taskMetaHTML(task);
     const expanded = ui.expandedTaskId === task.id;
-    const actions =
-      completed || task.done
-        ? ""
-        : `<button class="task-menu" type="button" data-action="menu" aria-label="任务操作 ${esc(
-            task.title
-          )}">${ICONS.dots}</button>`;
+    const actions = `<button class="task-menu" type="button" data-action="menu" aria-label="任务操作 ${esc(
+      task.title
+    )}">${ICONS.dots}</button>`;
     return `<article class="task-card ${completed || task.done ? "is-done" : ""} ${
       expanded ? "is-expanded" : ""
     }" data-task-id="${task.id}">
@@ -1037,6 +1264,50 @@
       !detail?.classList.contains("is-open"),
       targetCard
     );
+  }
+
+  function openTaskActionMenu(taskId) {
+    const task = state.tasks.find((item) => item.id === taskId);
+    if (!task) return;
+    const list = getList(task.listId);
+    const color = listColorOption(list.color);
+    openSheet(
+      `<div class="goal-action-sheet">
+        <div class="sheet-grab"></div>
+        <div class="goal-action-head">
+          <div class="goal-action-icon" style="background:${color.bg};color:${color.color}">${ICONS.check}</div>
+          <h2>${esc(task.title)}</h2>
+          <p>${formatShortDate(task.date)} · ${esc(list.name)}</p>
+        </div>
+        <div class="goal-action-list">
+          ${
+            task.done
+              ? ""
+              : `<button class="goal-action-item" type="button" id="taskActionEdit">${ICONS.pen}<span>编辑任务</span></button>
+                 <button class="goal-action-item" type="button" id="taskActionPostpone">${ICONS.calendarNext}<span>顺延到明天</span></button>`
+          }
+          <button class="goal-action-item goal-action-item--danger" type="button" id="taskActionDelete">${ICONS.trash}<span>删除任务</span></button>
+        </div>
+        <button class="confirm-cancel" type="button" data-close-sheet style="margin-top:10px">取消</button>
+      </div>`,
+      { className: "sheet--action", label: "任务操作" }
+    );
+    document.querySelector("#taskActionEdit")?.addEventListener("click", () => {
+      openTaskForm(taskId);
+    });
+    document
+      .querySelector("#taskActionPostpone")
+      ?.addEventListener("click", () => {
+        task.date = addDaysKey(task.date, 1);
+        saveState();
+        closeSheet();
+        ui.expandedTaskId = null;
+        refreshTasksView({ animate: false });
+        showToast(`已顺延到 ${formatShortDate(task.date)}`);
+      });
+    document.querySelector("#taskActionDelete").addEventListener("click", () => {
+      openDeleteTaskConfirm(taskId);
+    });
   }
 
   function emptyTaskHTML(hasDone) {
@@ -1128,6 +1399,7 @@
 
   function refreshTasksView(options = {}) {
     renderTaskHeader();
+    renderOverdueTasks();
     renderTaskList(options);
     updateDateStripDots();
     updateDateStripSelection();
@@ -1462,6 +1734,17 @@
             )}</textarea>
             <p class="form-error" id="taskFormError" hidden>给任务起个名字吧</p>
           </div>
+          ${
+            state.settings?.subtasksEnabled
+              ? `<div class="subtask-editor" id="subtaskEditor">
+                  <div class="subtask-editor-head">
+                    <span class="tag-picker-label">子任务</span>
+                    <button type="button" id="addSubtaskBtn">＋ 添加</button>
+                  </div>
+                  <div class="subtask-edit-list" id="subtaskEditList"></div>
+                </div>`
+              : ""
+          }
           <div class="form-divider"></div>
           <div class="field-block field-block--date" id="taskDateRow">
             <span class="field-icon">${ICONS.calendar}</span>
@@ -1507,6 +1790,65 @@
     const taskDateRow = document.querySelector("#taskDateRow");
     const dateTrigger = document.querySelector("#taskDateTrigger");
     const dateDisplay = document.querySelector("#taskDateDisplay");
+    const subtaskEditList = document.querySelector("#subtaskEditList");
+    let subtaskDrafts = (existing?.subtasks || []).map((item) => ({
+      id: item.id || uid("subtask"),
+      title: item.title,
+      done: item.done === true,
+    }));
+
+    const renderSubtaskDrafts = () => {
+      if (!subtaskEditList) return;
+      subtaskEditList.innerHTML = subtaskDrafts
+        .map(
+          (item, index) => `<div class="subtask-edit-row" data-subtask-index="${index}">
+            <button class="subtask-edit-check ${item.done ? "is-done" : ""}" type="button" data-subtask-done="${index}" aria-pressed="${item.done}">${item.done ? ICONS.check : ""}</button>
+            <input class="subtask-input" type="text" maxlength="80" value="${esc(item.title)}" placeholder="子任务 ${index + 1}" data-subtask-input="${index}">
+            <button class="subtask-remove" type="button" data-subtask-remove="${index}" aria-label="删除子任务">${ICONS.close}</button>
+          </div>`
+        )
+        .join("");
+    };
+    renderSubtaskDrafts();
+
+    if (subtaskEditList) {
+      document.querySelector("#addSubtaskBtn").addEventListener("click", () => {
+        subtaskDrafts.push({ id: uid("subtask"), title: "", done: false });
+        renderSubtaskDrafts();
+        const inputs = subtaskEditList.querySelectorAll(".subtask-input");
+        inputs[inputs.length - 1]?.focus();
+      });
+      subtaskEditList.addEventListener("pointerdown", (event) => {
+        if (event.target.closest("[data-subtask-remove]")) {
+          event.preventDefault();
+        }
+      });
+      subtaskEditList.addEventListener("input", (event) => {
+        const input = event.target.closest("[data-subtask-input]");
+        if (!input) return;
+        const index = Number(input.dataset.subtaskInput);
+        if (subtaskDrafts[index]) subtaskDrafts[index].title = input.value;
+      });
+      subtaskEditList.addEventListener("click", (event) => {
+        const doneButton = event.target.closest("[data-subtask-done]");
+        if (doneButton) {
+          const index = Number(doneButton.dataset.subtaskDone);
+          if (subtaskDrafts[index]) {
+            subtaskDrafts[index].done = !subtaskDrafts[index].done;
+            renderSubtaskDrafts();
+          }
+          return;
+        }
+        const removeButton = event.target.closest("[data-subtask-remove]");
+        if (removeButton) {
+          const index = Number(removeButton.dataset.subtaskRemove);
+          subtaskDrafts.splice(index, 1);
+          renderSubtaskDrafts();
+          const inputs = subtaskEditList.querySelectorAll(".subtask-input");
+          inputs[Math.min(index, inputs.length - 1)]?.focus();
+        }
+      });
+    }
 
     const resizeTitle = () => {
       titleInput.style.height = "auto";
@@ -1559,11 +1901,23 @@
       }
 
       const date = formDate || ui.selectedDate;
+      const cleanSubtasks = state.settings.subtasksEnabled
+        ? subtaskDrafts
+            .map((item) => ({
+              id: item.id,
+              title: item.title.trim(),
+              done: item.done === true,
+            }))
+            .filter((item) => item.title)
+        : existing?.subtasks || [];
       if (existing) {
         existing.title = title;
         existing.note = noteInput.value.trim();
         existing.date = date;
         existing.listId = selectedListId;
+        if (state.settings.subtasksEnabled) {
+          existing.subtasks = cleanSubtasks;
+        }
       } else {
         state.tasks.push({
           id: uid("task"),
@@ -1573,6 +1927,7 @@
           listId: selectedListId,
           done: false,
           createdAt: Date.now(),
+          subtasks: cleanSubtasks,
         });
       }
       saveState();
@@ -1832,9 +2187,9 @@
       progress.percent === 100 && progress.tasks.length ? "is-complete" : ""
     }" data-goal-id="${goal.id}">
       <div class="goal-top">
-        <div class="goal-icon" style="${goalColorStyle(goal.color || 0)}">${
+        <button class="goal-icon goal-color-trigger" type="button" data-action="goal-color" data-goal-color="${goal.id}" aria-label="选择目标颜色" style="${goalColorStyle(goal.color || 0)}">${
           GOAL_ICONS[goal.unit] || ICONS.flag
-        }</div>
+        }</button>
         <div class="goal-title-wrap">
           <h3 class="goal-title">${esc(goal.title)}</h3>
           <div class="goal-meta">
@@ -1871,6 +2226,118 @@
     </article>`;
   }
 
+  function renderGlobalSearch() {
+    if (!globalSearchInput || !globalSearchResults) return;
+    const query = globalSearchInput.value.trim().toLowerCase();
+    clearGlobalSearch.hidden = !query;
+    if (!query) {
+      globalSearchResults.hidden = true;
+      globalSearchResults.innerHTML = "";
+      return;
+    }
+    const groups = [
+      {
+        type: "task",
+        title: "任务",
+        items: state.tasks
+          .filter(
+            (task) =>
+              task.title.toLowerCase().includes(query) ||
+              (task.note || "").toLowerCase().includes(query)
+          )
+          .slice(0, 8),
+      },
+      {
+        type: "goal",
+        title: "目标",
+        items: state.goals
+          .filter((goal) => goal.title.toLowerCase().includes(query))
+          .slice(0, 5),
+      },
+      {
+        type: "habit",
+        title: "习惯",
+        items: state.habits
+          .filter((habit) => habit.title.toLowerCase().includes(query))
+          .slice(0, 5),
+      },
+      {
+        type: "list",
+        title: "清单",
+        items: state.lists
+          .filter((list) => list.name.toLowerCase().includes(query))
+          .slice(0, 5),
+      },
+    ].filter((group) => group.items.length);
+
+    if (!groups.length) {
+      globalSearchResults.hidden = false;
+      globalSearchResults.innerHTML = `<div class="search-empty">没有找到「${esc(
+        globalSearchInput.value.trim()
+      )}」</div>`;
+      return;
+    }
+
+    globalSearchResults.hidden = false;
+    globalSearchResults.innerHTML = groups
+      .map(
+        (group) => `<div class="search-group">
+          <div class="search-group-title">${group.title}</div>
+          ${group.items
+            .map((item) => {
+              if (group.type === "task") {
+                return `<button class="search-result" type="button" data-search-type="task" data-search-id="${item.id}">
+                  <span class="search-result-main"><strong>${esc(item.title)}</strong><small>${formatShortDate(item.date)} · ${esc(getList(item.listId).name)}${item.done ? " · 已完成" : ""}</small></span>
+                  ${ICONS.chevron}
+                </button>`;
+              }
+              if (group.type === "goal") {
+                return `<button class="search-result" type="button" data-search-type="goal" data-search-id="${item.id}">
+                  <span class="search-result-main"><strong>${esc(item.title)}</strong><small>${formatRange(item.startDate, item.endDate)}</small></span>
+                  ${ICONS.chevron}
+                </button>`;
+              }
+              if (group.type === "habit") {
+                return `<button class="search-result" type="button" data-search-type="habit" data-search-id="${item.id}">
+                  <span class="search-result-main"><strong>${esc(item.title)}</strong><small>${esc(getList(item.listId).name)}</small></span>
+                  ${ICONS.chevron}
+                </button>`;
+              }
+              return `<button class="search-result" type="button" data-search-type="list" data-search-id="${item.id}">
+                <span class="search-result-main"><strong>${esc(item.name)}</strong><small>清单</small></span>
+                ${ICONS.chevron}
+              </button>`;
+            })
+            .join("")}
+        </div>`
+      )
+      .join("");
+  }
+
+  function openSearchResult(type, id) {
+    if (type === "task") {
+      const task = state.tasks.find((item) => item.id === id);
+      if (!task) return;
+      ui.expandedTaskId = task.id;
+      selectDate(task.date, { force: true, scroll: false });
+      switchTab("tasks");
+    } else if (type === "goal") {
+      switchTab("create");
+      window.setTimeout(() => {
+        document
+          .querySelector(`[data-goal-id="${id}"]`)
+          ?.scrollIntoView({ block: "center", behavior: "smooth" });
+      }, 120);
+    } else if (type === "habit") {
+      openHabitsPage();
+    } else if (type === "list") {
+      openListManager();
+    }
+    globalSearchInput.value = "";
+    globalSearchInput.blur();
+    renderGlobalSearch();
+  }
+
   function renderHabitList() {
     if (!habitList) return;
     ensureHabitTasks(todayKey());
@@ -1884,18 +2351,29 @@
     habitList.innerHTML = state.habits
       .map((habit) => {
         const todayTask = habitTaskFor(habit.id);
-        const done = Boolean(todayTask?.done);
+        const scheduledToday = habitMatchesDate(habit, todayKey());
+        const done = Boolean(scheduledToday && todayTask?.done);
         const streak = habitStreak(habit.id);
         const list = getList(habit.listId);
+        const habitColor = listColorOption(habit.color || stableHabitColor(habit.id));
+        const repeatLabel = habitRepeatLabel(habit);
         return `<article class="habit-card ${done ? "is-done" : ""}" data-habit-id="${habit.id}">
-          <span class="habit-state ${done ? "is-done" : ""}" aria-hidden="true">${
+          <button class="habit-state habit-color-trigger ${done ? "is-done" : ""}" type="button" data-habit-color="${habit.id}" aria-label="选择习惯颜色" style="color:${habitColor.color};background:${habitColor.bg}">${
           done ? ICONS.check : ICONS.sun
-        }</span>
+        }</button>
           <div class="habit-copy">
             <strong>${esc(habit.title)}</strong>
-            <small>${esc(list.name)} · ${
-          done ? "今天已完成" : "今天待完成"
-        }${streak > 0 ? ` · 连续 ${streak} 天` : ""}</small>
+            <small>${esc(list.name)} · ${repeatLabel} · ${
+          !scheduledToday
+            ? "今天不重复"
+            : done
+              ? "今天已完成"
+              : "今天待完成"
+        }${
+          habitRepeat(habit).type === "daily" && streak > 0
+            ? ` · 连续 ${streak} 天`
+            : ""
+        }</small>
           </div>
           <button class="habit-menu" type="button" data-habit-menu="${habit.id}" aria-label="习惯操作">${ICONS.dots}</button>
         </article>`;
@@ -1909,12 +2387,21 @@
       : null;
     let selectedListId =
       existing?.listId || state.lists[0]?.id || "list_work";
+    const today = parseKey(todayKey());
+    let repeat = {
+      type: existing?.repeat?.type || "daily",
+      weekdays:
+        existing?.repeat?.weekdays?.length
+          ? [...existing.repeat.weekdays]
+          : [today.getDay()],
+      endDate: existing?.repeat?.endDate || "",
+    };
     openSheet(
       `<div class="form-sheet">
         <div class="sheet-grab"></div>
         <header class="sheet-head">
           <button class="round-close" type="button" data-close-sheet aria-label="关闭">${ICONS.close}</button>
-          <h2>${existing ? "编辑每日习惯" : "新建每日习惯"}</h2>
+          <h2>${existing ? "编辑重复任务" : "新建重复任务"}</h2>
           <button class="head-action" type="button" id="saveHabitAction">保存</button>
         </header>
         <div class="sheet-body">
@@ -1924,7 +2411,7 @@
               value="${esc(existing?.title || "")}" placeholder="例如：阅读 20 分钟">
           </div>
           <div class="tag-picker-block">
-            <p class="tag-picker-label">每天放入哪一个清单</p>
+            <p class="tag-picker-label">放入哪一个清单</p>
             <div class="list-picker" id="habitListPicker">
               ${state.lists
                 .map(
@@ -1940,14 +2427,94 @@
                 .join("")}
             </div>
           </div>
-          <p class="habit-form-note">每天打开轻清单时，会自动生成一条当天的习惯任务。</p>
+          <div class="habit-repeat-block">
+            <p class="tag-picker-label">重复方式</p>
+            <div class="segmented habit-repeat-segment" id="habitRepeatType">
+              <button type="button" data-repeat-type="daily" class="${repeat.type === "daily" ? "is-active" : ""}">每天</button>
+              <button type="button" data-repeat-type="weekly" class="${repeat.type === "weekly" ? "is-active" : ""}">每周</button>
+            </div>
+            <div class="habit-weekday-picker" id="habitWeekdayPicker">
+              ${["日", "一", "二", "三", "四", "五", "六"]
+                .map(
+                  (label, day) =>
+                    `<button class="habit-weekday ${repeat.weekdays.includes(day) ? "is-selected" : ""}" type="button" data-weekday="${day}">${label}</button>`
+                )
+                .join("")}
+            </div>
+            <button class="habit-end-date" type="button" id="habitEndDateBtn">${repeat.endDate ? `结束于 ${formatShortDate(repeat.endDate)}` : "不设结束日期"}</button>
+            <button class="habit-end-clear" type="button" id="habitEndDateClear" ${repeat.endDate ? "" : "hidden"}>清除结束日期</button>
+          </div>
+          <p class="habit-form-note">到日期时会自动生成一条任务；完成入口仍在任务清单。</p>
         </div>
       </div>`,
-      { className: "sheet--form", label: existing ? "编辑每日习惯" : "新建每日习惯" }
+      { className: "sheet--form", label: existing ? "编辑重复任务" : "新建重复任务" }
     );
 
     const nameInput = document.querySelector("#habitNameInput");
     const picker = document.querySelector("#habitListPicker");
+    const repeatType = document.querySelector("#habitRepeatType");
+    const weekdayPicker = document.querySelector("#habitWeekdayPicker");
+
+    const syncRepeatControls = () => {
+      weekdayPicker.hidden = repeat.type !== "weekly";
+      repeatType.querySelectorAll("[data-repeat-type]").forEach((button) => {
+        button.classList.toggle(
+          "is-active",
+          button.dataset.repeatType === repeat.type
+        );
+      });
+    };
+    syncRepeatControls();
+
+    repeatType.addEventListener("pointerdown", (event) => {
+      if (event.target.closest("button")) event.preventDefault();
+    });
+    weekdayPicker.addEventListener("pointerdown", (event) => {
+      if (event.target.closest("button")) event.preventDefault();
+    });
+
+    repeatType.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-repeat-type]");
+      if (!button) return;
+      repeat.type = button.dataset.repeatType;
+      syncRepeatControls();
+    });
+    weekdayPicker.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-weekday]");
+      if (!button) return;
+      const day = Number(button.dataset.weekday);
+      if (repeat.weekdays.includes(day)) {
+        if (repeat.weekdays.length === 1) return;
+        repeat.weekdays = repeat.weekdays.filter((item) => item !== day);
+      } else {
+        repeat.weekdays = [...repeat.weekdays, day];
+      }
+      button.classList.toggle("is-selected");
+    });
+    document
+      .querySelector("#habitEndDateBtn")
+      .addEventListener("click", () => {
+        openCalendarPicker(
+          repeat.endDate || todayKey(),
+          (key) => {
+            repeat.endDate = key;
+            document.querySelector("#habitEndDateBtn").textContent =
+              `结束于 ${formatShortDate(key)}`;
+            document.querySelector("#habitEndDateClear").hidden = false;
+          },
+          null,
+          "选择重复结束日期"
+        );
+      });
+    document
+      .querySelector("#habitEndDateClear")
+      .addEventListener("click", () => {
+        repeat.endDate = "";
+        document.querySelector("#habitEndDateBtn").textContent =
+          "不设结束日期";
+        document.querySelector("#habitEndDateClear").hidden = true;
+      });
+
     picker.addEventListener("click", (event) => {
       const button = event.target.closest("[data-list-id]");
       if (!button) return;
@@ -1973,9 +2540,15 @@
         nameInput.focus();
         return;
       }
+      const repeatValue = {
+        type: repeat.type,
+        weekdays: [...repeat.weekdays],
+        endDate: repeat.endDate,
+      };
       if (existing) {
         existing.title = title;
         existing.listId = selectedListId;
+        existing.repeat = repeatValue;
         state.tasks.forEach((task) => {
           if (task.habitId === existing.id && !task.done) {
             task.title = title;
@@ -1987,6 +2560,8 @@
           id: uid("habit"),
           title,
           listId: selectedListId,
+          color: randomHabitColor(),
+          repeat: repeatValue,
           createdAt: Date.now(),
         });
       }
@@ -1995,8 +2570,91 @@
       closeSheet();
       renderGoalList();
       refreshTasksView({ animate: false });
-      showToast(existing ? "习惯已更新" : "每日习惯已创建");
+      showToast(existing ? "重复任务已更新" : "重复任务已创建");
     });
+  }
+
+  function openColorPicker(title, options, selectedIndex, onSelect, icon = ICONS.check) {
+    const selected = options[selectedIndex] || options[0];
+    openSheet(
+      `<div class="color-sheet">
+        <div class="sheet-grab"></div>
+        <div class="color-current-icon" style="background:${selected.color}">${icon}</div>
+        <h2>${title}</h2>
+        <p>选择后会立即应用到这个项目。</p>
+        <div class="color-picker color-picker--cards">
+          ${options
+            .map(
+              (option, index) =>
+                `<button class="color-card ${
+                  index === selectedIndex ? "is-selected" : ""
+                }" type="button" data-picker-color="${index}" aria-label="${
+                  option.label
+                }色" style="--swatch:${option.color};--card-color:${option.color}">
+                  <span class="color-card-dot"></span>
+                  <span class="color-card-label">${option.label}</span>
+                  <span class="color-card-check">${ICONS.check}</span>
+                </button>`
+            )
+            .join("")}
+        </div>
+        <button class="confirm-cancel" type="button" data-close-sheet style="margin-top:14px">取消</button>
+      </div>`,
+      { className: "sheet--action sheet--color", label: title }
+    );
+    document.querySelectorAll("[data-picker-color]").forEach((button) => {
+      button.addEventListener("click", () => {
+        onSelect(Number(button.dataset.pickerColor));
+        closeSheet();
+      });
+    });
+  }
+
+  function openGoalColorPicker(goalId) {
+    const goal = state.goals.find((item) => item.id === goalId);
+    if (!goal) return;
+    const options = GOAL_COLOR_KEYS.map((key, index) => ({
+      key,
+      color: GOAL_COLORS[index][1],
+      label: ["蓝", "橙", "绿", "紫", "青"][index],
+    }));
+    openColorPicker(
+      "选择目标颜色",
+      options,
+      Math.max(0, Math.min(GOAL_COLOR_KEYS.length - 1, Number(goal.color) || 0)),
+      (index) => {
+        goal.color = index;
+        saveState();
+        renderGoalList();
+        showToast("目标颜色已更新");
+      },
+      GOAL_ICONS[goal.unit] || ICONS.flag
+    );
+  }
+
+  function openHabitColorPicker(habitId) {
+    const habit = state.habits.find((item) => item.id === habitId);
+    if (!habit) return;
+    const options = HABIT_COLOR_KEYS.map((key) => ({
+      key,
+      ...LIST_COLOR_OPTIONS[key],
+    }));
+    const selectedIndex = Math.max(
+      0,
+      HABIT_COLOR_KEYS.indexOf(habit.color || stableHabitColor(habit.id))
+    );
+    openColorPicker(
+      "选择习惯颜色",
+      options,
+      selectedIndex,
+      (index) => {
+        habit.color = HABIT_COLOR_KEYS[index];
+        saveState();
+        renderHabitList();
+        showToast("习惯颜色已更新");
+      },
+      ICONS.sun
+    );
   }
 
   function openHabitActions(habitId) {
@@ -2009,7 +2667,7 @@
         <div class="goal-action-head">
           <div class="goal-action-icon" style="background:var(--accent-soft);color:var(--accent)">${ICONS.sun}</div>
           <h2>${esc(habit.title)}</h2>
-          <p>每日习惯 · ${esc(getList(habit.listId).name)} · 连续 ${habitStreak(
+          <p>${habitRepeatLabel(habit)} · ${esc(getList(habit.listId).name)} · 连续 ${habitStreak(
         habit.id
       )} 天</p>
         </div>
@@ -2104,6 +2762,7 @@
     );
 
     document.querySelector("#editGoalAction").addEventListener("click", () => {
+      closeSheet({ immediate: true });
       openGoalEditor(goalId);
     });
 
@@ -2197,8 +2856,9 @@
       listId: goal.listId || defaultGoalListId(),
       plan: JSON.parse(JSON.stringify(goal.plan)),
     };
-    openSheet("", { className: "sheet--wizard", label: "编辑目标" });
-    renderGoalWizardStep2({ focusTitle: true });
+    openFullPage("page-goal", "create", () =>
+      renderGoalWizardStep2({ focusTitle: true })
+    );
   }
 
   function openLegacyGoalTitleEditor(goal) {
@@ -2341,7 +3001,7 @@
     goal.actionCount = nodes.size;
 
     saveState();
-    closeSheet();
+    closeFullPageTo("create");
     renderGoalList();
     refreshTasksView({ animate: false });
     showToast(
@@ -2565,16 +3225,15 @@
       listId: defaultGoalListId(),
       plan: null,
     };
-    openSheet("", { className: "sheet--wizard", label: "新建目标" });
-    renderGoalWizardStep1();
+    openFullPage("page-goal", "create", renderGoalWizardStep1);
   }
 
   function wizardHeader(title, subtitle, progress, backButton = false) {
     return `<header class="wizard-head">
       ${
         backButton
-          ? `<button class="icon-button--bare" type="button" id="wizardBack" aria-label="返回">${ICONS.arrowLeft}</button>`
-          : `<button class="icon-button--bare" type="button" data-close-sheet aria-label="关闭">${ICONS.close}</button>`
+          ? `<button class="icon-button--bare wizard-close-back" type="button" id="wizardBack" aria-label="返回">${ICONS.arrowLeft}</button>`
+          : `<button class="icon-button--bare wizard-close-back" type="button" data-close-fullpage aria-label="返回">${ICONS.arrowLeft}</button>`
       }
       <div class="wizard-head-center">
         <strong>${title}</strong>
@@ -2582,7 +3241,7 @@
       </div>
       ${
         backButton
-          ? `<button class="icon-button--bare" type="button" data-close-sheet aria-label="关闭">${ICONS.close}</button>`
+          ? `<button class="icon-button--bare" type="button" data-close-fullpage aria-label="关闭">${ICONS.close}</button>`
           : "<span></span>"
       }
     </header>
@@ -2673,7 +3332,7 @@
     const preview = goalPreview(goalDraft);
     const ideas = ["读完 12 本书", "跑完半程马拉松", "连续早起 30 天"];
 
-    sheet.innerHTML = `<div class="wizard">
+    goalPage.innerHTML = `<div class="wizard">
       ${wizardHeader("新建目标", "CREATE A GOAL", 50)}
       <div class="wizard-scroll">
         <p class="wizard-kicker">01 · 命名</p>
@@ -2780,7 +3439,7 @@
       });
     });
 
-    sheet.querySelectorAll("[data-unit]").forEach((button) => {
+    goalPage.querySelectorAll("[data-unit]").forEach((button) => {
       button.addEventListener("click", () => {
         const nextUnit = button.dataset.unit;
         if (nextUnit === goalDraft.unit) return;
@@ -2789,7 +3448,7 @@
         goalDraft.count =
           goalDraft.counts[nextUnit] || UNIT_CONFIG[nextUnit].presets[0];
         goalDraft.plan = null;
-        sheet.querySelectorAll("[data-unit]").forEach((unitButton) => {
+        goalPage.querySelectorAll("[data-unit]").forEach((unitButton) => {
           unitButton.classList.toggle(
             "is-active",
             unitButton.dataset.unit === nextUnit
@@ -2843,6 +3502,7 @@
     });
 
     updateWizardPrimary();
+    goalPage.scrollTo({ top: 0, behavior: "auto" });
   }
 
   function planDayFieldHTML(day, placeholder) {
@@ -2892,10 +3552,10 @@
   }
 
   function collectWeekFromSheet(week) {
-    const weekInput = sheet.querySelector(`[data-week-id="${week.id}"]`);
+    const weekInput = goalPage.querySelector(`[data-week-id="${week.id}"]`);
     if (weekInput) week.goal = weekInput.value.trim();
     week.days.forEach((day) => {
-      const dayInput = sheet.querySelector(`[data-day-id="${day.id}"]`);
+      const dayInput = goalPage.querySelector(`[data-day-id="${day.id}"]`);
       if (dayInput) day.action = dayInput.value.trim();
     });
   }
@@ -2903,7 +3563,7 @@
   function collectPlanFromSheet(plan) {
     if (plan.months) {
       plan.months.forEach((month) => {
-        const monthInput = sheet.querySelector(`[data-month-id="${month.id}"]`);
+        const monthInput = goalPage.querySelector(`[data-month-id="${month.id}"]`);
         if (monthInput) month.goal = monthInput.value.trim();
         month.weeks.forEach(collectWeekFromSheet);
       });
@@ -2913,7 +3573,7 @@
     }
     if (plan.days) {
       plan.days.forEach((day) => {
-        const dayInput = sheet.querySelector(`[data-day-id="${day.id}"]`);
+        const dayInput = goalPage.querySelector(`[data-day-id="${day.id}"]`);
         if (dayInput) day.action = dayInput.value.trim();
       });
     }
@@ -3041,7 +3701,7 @@
       `<span class="plan-hero-stat"><b>${plan.dayCount}</b> 个行动</span>`
     );
 
-    sheet.innerHTML = `<div class="wizard">
+    goalPage.innerHTML = `<div class="wizard">
       ${
         isEditing
           ? wizardHeader("编辑目标", "EDIT YOUR GOAL", 100, false)
@@ -3150,7 +3810,7 @@
         });
 
       if (goalDraft.unit === "week") {
-        sheet.querySelectorAll("[data-week-count]").forEach((button) => {
+        goalPage.querySelectorAll("[data-week-count]").forEach((button) => {
           button.addEventListener("click", () => {
             collectPlanFromSheet(goalDraft.plan);
             const currentCount = goalDraft.plan.weeks.length;
@@ -3160,14 +3820,12 @@
               52
             );
             if (nextCount === currentCount) return;
-            const scrollTop =
-              document.querySelector(".wizard-scroll")?.scrollTop || 0;
+            const scrollTop = goalPage.scrollTop;
             resizeWeekPlan(goalDraft.plan, nextCount);
             goalDraft.count = nextCount;
             renderGoalWizardStep2();
             requestAnimationFrame(() => {
-              const scroller = document.querySelector(".wizard-scroll");
-              if (scroller) scroller.scrollTop = scrollTop;
+              goalPage.scrollTop = scrollTop;
             });
           });
         });
@@ -3197,6 +3855,7 @@
         }
       });
     });
+    goalPage.scrollTo({ top: 0, behavior: "auto" });
   }
 
   function addSyncedTasks(goal, specs) {
@@ -3221,8 +3880,7 @@
 
   function finishGoalCreation(goal, specs) {
     addSyncedTasks(goal, specs);
-    closeSheet();
-    switchTab("create");
+    closeFullPageTo("create");
     showToast(
       specs.length
         ? `拆解完成，已同步 ${specs.length} 个每日行动`
@@ -3309,8 +3967,8 @@
               <strong>${esc(list.name)}</strong>
               <small>${usage.tasks} 个任务 · ${usage.goals} 个目标</small>
             </span>
-            <span class="list-manage-edit">${ICONS.pen}</span>
           </button>
+          <button class="list-manage-edit-button" type="button" data-list-edit="${list.id}" aria-label="编辑清单 ${esc(list.name)}">${ICONS.pen}</button>
           ${
             state.lists.length > 1
               ? `<button class="list-manage-delete" type="button" data-list-delete="${list.id}" aria-label="删除清单 ${esc(
@@ -3324,9 +3982,16 @@
 
     listManagerContent.querySelectorAll("[data-list-open]").forEach((button) => {
       button.addEventListener("click", () => {
-        openListEditor(button.dataset.listOpen);
+        openListDetail(button.dataset.listOpen);
       });
     });
+    listManagerContent
+      .querySelectorAll("[data-list-edit]")
+      .forEach((button) => {
+        button.addEventListener("click", () => {
+          openListEditor(button.dataset.listEdit);
+        });
+      });
     listManagerContent
       .querySelectorAll("[data-list-delete]")
       .forEach((button) => {
@@ -3345,6 +4010,115 @@
     if (!overlay.hidden) closeSheet();
     showSubPage("page-lists", "profile");
   }
+
+  function renderListDetailPage() {
+    const list = state.lists.find((item) => item.id === ui.activeListId);
+    if (!list) return;
+    const tasks = state.tasks
+      .filter((task) => task.listId === list.id)
+      .sort(
+        (a, b) =>
+          a.date.localeCompare(b.date) ||
+          Number(a.done) - Number(b.done) ||
+          (a.createdAt || 0) - (b.createdAt || 0)
+      );
+    listDetailTitle.textContent = list.name;
+    listDetailIntro.textContent = `${tasks.length} 个任务 · 可勾选后批量删除`;
+    const selected = ui.listSelected;
+    listDetailContent.innerHTML = tasks.length
+      ? tasks
+          .map(
+            (task) => `<div class="list-detail-task ${task.done ? "is-done" : ""}">
+              <label class="list-detail-select">
+                <input type="checkbox" data-list-task-select="${task.id}" ${selected.has(task.id) ? "checked" : ""}>
+                <span></span>
+              </label>
+              <div class="list-detail-task-main">
+                <strong>${esc(task.title)}</strong>
+                <small>${formatShortDate(task.date)}${task.done ? " · 已完成" : ""}</small>
+                ${task.subtasks?.length ? `<div class="list-detail-subtasks">${task.subtasks.map((item) => `<span class="${item.done ? "is-done" : ""}">${item.done ? "✓" : "○"} ${esc(item.title)}</span>`).join("")}</div>` : ""}
+              </div>
+            </div>`
+          )
+          .join("")
+      : `<div class="list-detail-empty">这个清单还没有任务。</div>`;
+    const allSelected = tasks.length > 0 && tasks.every((task) => selected.has(task.id));
+    listSelectAll.textContent = allSelected ? "取消全选" : "全选";
+    listDeleteSelected.disabled = selected.size === 0;
+    listDeleteSelected.textContent = selected.size
+      ? `删除所选 (${selected.size})`
+      : "删除所选";
+  }
+
+  function openListDetail(listId) {
+    const list = state.lists.find((item) => item.id === listId);
+    if (!list) return;
+    ui.activeListId = listId;
+    ui.listSelected = new Set();
+    renderListDetailPage();
+    showSubPage("page-list-detail", "profile");
+  }
+
+  function openDeleteListTasksConfirm() {
+    const ids = [...ui.listSelected];
+    if (!ids.length) return;
+    openSheet(
+      `<div class="confirm-sheet">
+        <div class="sheet-grab"></div>
+        <div class="confirm-icon">${ICONS.trash}</div>
+        <h2>删除 ${ids.length} 个任务？</h2>
+        <p>这些任务会从当前清单和日期中一起删除，这个操作不能撤销。</p>
+        <div class="confirm-actions">
+          <button class="btn-danger" type="button" id="confirmDeleteListTasks">${ICONS.trash}<span>确认删除</span></button>
+          <button class="confirm-cancel" type="button" data-close-sheet>取消</button>
+        </div>
+      </div>`,
+      { className: "sheet--action", label: "确认批量删除任务" }
+    );
+    document.querySelector("#confirmDeleteListTasks").addEventListener("click", () => {
+      const removed = state.tasks.filter((task) => ids.includes(task.id));
+      removed.forEach((task) => {
+        if (task.habitId) {
+          state.habitSkips = [
+            ...(state.habitSkips || []),
+            habitSkipKey(task.habitId, task.date),
+          ];
+        }
+      });
+      state.tasks = state.tasks.filter((task) => !ids.includes(task.id));
+      ui.listSelected = new Set();
+      if (ui.expandedTaskId && ids.includes(ui.expandedTaskId)) {
+        ui.expandedTaskId = null;
+      }
+      saveState();
+      closeSheet();
+      renderListDetailPage();
+      renderListManagerPage();
+      refreshTasksView({ animate: false });
+      showToast(`已删除 ${ids.length} 个任务`);
+    });
+  }
+
+  listDetailBack.addEventListener("click", () => {
+    closePageTo("page-lists", "profile");
+  });
+  listSelectAll.addEventListener("click", () => {
+    const tasks = state.tasks.filter(
+      (task) => task.listId === ui.activeListId
+    );
+    const all = tasks.length > 0 && tasks.every((task) => ui.listSelected.has(task.id));
+    ui.listSelected = new Set(all ? [] : tasks.map((task) => task.id));
+    renderListDetailPage();
+  });
+  listDeleteSelected.addEventListener("click", openDeleteListTasksConfirm);
+  listDetailContent.addEventListener("change", (event) => {
+    const input = event.target.closest("[data-list-task-select]");
+    if (!input) return;
+    const id = input.dataset.listTaskSelect;
+    if (input.checked) ui.listSelected.add(id);
+    else ui.listSelected.delete(id);
+    renderListDetailPage();
+  });
 
   function openListEditor(listId = null) {
     const existing = listId
@@ -3508,7 +4282,7 @@
     });
   }
 
-  function openStatsSheet() {
+  function openStatsPage(returnTab = "profile") {
     const today = todayKey();
     const todayTasks = state.tasks.filter((task) => task.date === today);
     const todayDone = todayTasks.filter((task) => task.done).length;
@@ -3569,8 +4343,7 @@
           .join("")
       : `<div class="stats-empty">还没有创建目标，去「创造」里添加一个吧。</div>`;
 
-    openSheet(
-      `<div class="wizard">
+    statsPage.innerHTML = `<div class="wizard">
         ${wizardHeader("统计", "INSIGHTS", 100, false)}
         <div class="wizard-scroll">
           <div class="stats-hero">
@@ -3627,9 +4400,9 @@
           } 个目标</small></div>
           <div class="stats-goal-list">${goalList}</div>
         </div>
-      </div>`,
-      { className: "sheet--wizard", label: "统计" }
-    );
+      </div>`;
+    statsPage.dataset.returnTab = returnTab;
+    openFullPage("page-stats", returnTab);
   }
 
   async function exportData() {
@@ -3740,9 +4513,53 @@
       });
   }
 
-  function openDataSheet() {
+  function sampleTaskCount() {
+    return state.tasks.filter(isSampleTask).length;
+  }
+
+  function openClearSamplesConfirm() {
+    const count = sampleTaskCount();
+    if (!count) {
+      showToast("当前没有示例任务");
+      return;
+    }
     openSheet(
-      `<div class="wizard">
+      `<div class="confirm-sheet">
+        <div class="sheet-grab"></div>
+        <div class="confirm-icon">${ICONS.trash}</div>
+        <h2>清空示例任务？</h2>
+        <p>将删除 ${count} 条示例任务，真实任务、目标、习惯和清单不会受影响。此操作不能撤销。</p>
+        <div class="confirm-actions">
+          <button class="btn-danger" type="button" id="confirmClearSamples">${ICONS.trash}<span>确认清空</span></button>
+          <button class="confirm-cancel" type="button" data-close-sheet>取消</button>
+        </div>
+      </div>`,
+      { className: "sheet--action", label: "确认清空示例任务" }
+    );
+    document.querySelector("#confirmClearSamples").addEventListener("click", () => {
+      const sampleHabitIds = new Set(
+        state.habits.filter((habit) => habit.isSample === true).map((habit) => habit.id)
+      );
+      state.tasks = state.tasks.filter((task) => !isSampleTask(task));
+      state.goals = state.goals.filter((goal) => goal.isSample !== true);
+      state.habits = state.habits.filter((habit) => habit.isSample !== true);
+      state.habitSkips = (state.habitSkips || []).filter(
+        (key) => ![...sampleHabitIds].some((id) => key.startsWith(`${id}:`))
+      );
+      saveState();
+      closeSheet();
+      ui.expandedTaskId = null;
+      refreshTasksView({ animate: false });
+      renderGoalList();
+      renderHabitList();
+      if (!dataPage.hidden) openDataPage();
+      showToast("示例任务已清空");
+    });
+  }
+
+  function openDataPage() {
+    const samples = sampleTaskCount();
+    dataPage.innerHTML = `<div class="wizard">
         ${wizardHeader("数据", "DATA", 100, false)}
         <div class="wizard-scroll">
           <div class="data-summary">
@@ -3765,18 +4582,16 @@
             </button>
             <input type="file" id="importDataInput" accept=".json,application/json" hidden>
           </div>
-          <div class="data-danger-card">
+          <div class="data-sample-card">
             <div>
-              <strong>清空并恢复默认</strong>
-              <span>删除本机所有任务、目标和清单</span>
+              <strong>示例任务</strong>
+              <span>${samples ? `当前有 ${samples} 条首次启动示例` : "当前没有示例任务"}</span>
             </div>
-            <button type="button" id="resetDataFromSheet">清空</button>
+            <button type="button" id="clearSamplesBtn" ${samples ? "" : "disabled"}>清空示例</button>
           </div>
           <p class="data-note">备份包含任务、目标、清单和完成记录。导入会替换当前数据。</p>
         </div>
-      </div>`,
-      { className: "sheet--wizard", label: "数据" }
-    );
+      </div>`;
 
     document.querySelector("#exportDataBtn").addEventListener("click", exportData);
     document.querySelector("#importDataBtn").addEventListener("click", () => {
@@ -3791,15 +4606,17 @@
         input.value = "";
       });
     document
-      .querySelector("#resetDataFromSheet")
-      .addEventListener("click", openResetDataConfirm);
+      .querySelector("#clearSamplesBtn")
+      .addEventListener("click", openClearSamplesConfirm);
+    openFullPage("page-data", "profile");
   }
 
-  function openSettingsSheet() {
+  function openSettingsPage() {
     const currentScale = state.settings?.fontScale ?? FONT_SCALE_DEFAULT;
+    const darkNow = effectiveThemeIsDark();
+    const themeMode = state.settings?.themeMode || "system";
 
-    openSheet(
-      `<div class="wizard">
+    settingsPage.innerHTML = `<div class="wizard">
         ${wizardHeader("设置", "SETTINGS", 100, false)}
         <div class="wizard-scroll">
           <div class="settings-section-label">字体大小</div>
@@ -3819,58 +4636,71 @@
               </button>`
             ).join("")}
           </div>
-          <p class="font-note">默认使用「大」。调整后会立即应用到任务、目标、清单、统计等全部页面。</p>
-          <div class="settings-about">轻清单 1.10.2 · 离线自用版</div>
+          <p class="font-note">默认使用「标准」。调整后会立即应用到任务、目标、清单、统计等全部页面。</p>
+          <div class="settings-section-label" style="margin-top:22px">显示与行为</div>
+          <div class="settings-toggle-list">
+            <button class="settings-toggle-row" type="button" id="darkModeToggle" aria-pressed="${darkNow}">
+              <span class="settings-toggle-copy"><strong>深色模式</strong><small>${themeMode === "system" ? "跟随系统" : themeMode === "dark" ? "已手动开启" : "已手动关闭"}</small></span>
+              <span class="settings-switch ${darkNow ? "is-on" : ""}" aria-hidden="true"></span>
+            </button>
+            ${themeMode !== "system" ? `<button class="settings-system-reset" type="button" id="themeSystemReset">恢复跟随系统</button>` : ""}
+            <button class="settings-toggle-row" type="button" id="subtasksToggle" aria-pressed="${state.settings.subtasksEnabled === true}">
+              <span class="settings-toggle-copy"><strong>子任务</strong><small>在任务里添加可勾选的步骤</small></span>
+              <span class="settings-switch ${state.settings.subtasksEnabled ? "is-on" : ""}" aria-hidden="true"></span>
+            </button>
+          </div>
+          <div class="settings-about">轻清单 1.12.9</div>
         </div>
-      </div>`,
-      { className: "sheet--wizard", label: "设置" }
-    );
+      </div>`;
 
-    sheet.querySelectorAll("[data-font-scale]").forEach((button) => {
+    settingsPage.querySelectorAll("[data-font-scale]").forEach((button) => {
       button.addEventListener("click", () => {
         const nextScale = Number(button.dataset.fontScale);
         if (!FONT_SCALE_OPTIONS.some((option) => option.value === nextScale)) {
           return;
         }
         state.settings.fontScale = nextScale;
+        state.settings.fontScaleRev = 2;
         saveState();
         applyFontScale();
-        openSettingsSheet();
+        openSettingsPage();
       });
     });
-  }
 
-  function openResetDataConfirm() {
-    openSheet(
-      `<div class="confirm-sheet">
-        <div class="sheet-grab"></div>
-        <div class="confirm-icon">${ICONS.trash}</div>
-        <h2>清空所有数据？</h2>
-        <p>所有任务、目标、完成记录都会被清除，页面会恢复到最初的默认状态。这个操作不能撤销。</p>
-        <div class="confirm-actions">
-          <button class="btn-danger" type="button" id="confirmResetData">${ICONS.trash}<span>清空并恢复默认</span></button>
-          <button class="confirm-cancel" type="button" data-close-sheet>取消</button>
-        </div>
-      </div>`,
-      { className: "sheet--action", label: "确认清空数据" }
-    );
-
-    document.querySelector("#confirmResetData").addEventListener("click", () => {
-      try {
-        localStorage.removeItem(STORAGE_KEY);
-      } catch (error) {
-        console.warn("清空本地数据失败。", error);
-      }
-      const url = new URL(window.location.href);
-      url.searchParams.delete("reset");
-      url.hash = "";
-      window.location.replace(url.toString());
+    document.querySelector("#darkModeToggle").addEventListener("click", () => {
+      state.settings.themeMode = effectiveThemeIsDark() ? "light" : "dark";
+      state.settings.darkMode = state.settings.themeMode === "dark";
+      saveState();
+      applyTheme();
+      openSettingsPage();
     });
+
+    document
+      .querySelector("#themeSystemReset")
+      ?.addEventListener("click", () => {
+        state.settings.themeMode = "system";
+        state.settings.darkMode = false;
+        saveState();
+        applyTheme();
+        openSettingsPage();
+      });
+
+    document
+      .querySelector("#subtasksToggle")
+      .addEventListener("click", () => {
+        state.settings.subtasksEnabled =
+          state.settings.subtasksEnabled !== true;
+        saveState();
+        openSettingsPage();
+      });
+    openFullPage("page-settings", "profile");
   }
 
   // ---------- Sheet / overlay ----------
   function openSheet(content, options = {}) {
     window.clearTimeout(sheetClosingTimer);
+    window.clearTimeout(toastTimer);
+    toast.classList.remove("is-showing");
     const wasOpen = !overlay.hidden && overlay.classList.contains("is-open");
     sheetOpenedAt = Date.now();
     overlay.hidden = false;
@@ -3889,11 +4719,19 @@
     }
   }
 
-  function closeSheet() {
+  function closeSheet(options = {}) {
     closeCalendarPicker();
     cancelTaskMorph();
-    editingGoalId = null;
     if (overlay.hidden) return;
+    if (options.immediate) {
+      window.clearTimeout(sheetClosingTimer);
+      overlay.hidden = true;
+      overlay.classList.remove("is-open", "is-closing");
+      sheet.innerHTML = "";
+      sheet.className = "sheet";
+      document.body.classList.remove("sheet-open");
+      return;
+    }
     overlay.classList.remove("is-open");
     overlay.classList.add("is-closing");
     window.clearTimeout(sheetClosingTimer);
@@ -3917,19 +4755,178 @@
   }
 
   // ---------- Navigation ----------
-  function showSubPage(pageId, tab) {
-    ui.activeTab = tab;
-    document.querySelectorAll(".page").forEach((page) => {
-      const active = page.id === pageId;
-      page.hidden = !active;
-      page.classList.toggle("is-active", active);
-    });
+  let pageTransitionTimer = 0;
+  let pageTransitionToken = 0;
+  let pageSettleTimer = 0;
+  const pageScrollPositions = new Map();
+
+  function currentPage() {
+    return document.querySelector(".page.is-active:not([hidden])");
+  }
+
+  function scrollPageToTop(page = currentPage(), behavior = "auto") {
+    if (!page) return;
+    page.scrollTo({ top: 0, behavior });
+  }
+
+  function setTabButtons(tab) {
     document.querySelectorAll("[data-tab]").forEach((button) => {
       const active = button.dataset.tab === tab;
       button.classList.toggle("is-active", active);
       button.setAttribute("aria-selected", String(active));
     });
-    screen.scrollTo({ top: 0, behavior: "auto" });
+  }
+
+  function resetPageTransition() {
+    window.clearTimeout(pageTransitionTimer);
+    window.clearTimeout(pageSettleTimer);
+    pageTransitionToken += 1;
+    document.querySelectorAll(".page").forEach((page) => {
+      page.classList.remove(
+        "is-underlay",
+        "is-fading",
+        "is-fade-out",
+        "no-page-anim",
+        "is-tab-entering",
+        "is-page-settling"
+      );
+    });
+  }
+
+  function transitionPage(target, tab, options = {}) {
+    if (!target) return;
+    const source = document.querySelector(".page.is-active:not([hidden])");
+    if (source === target) {
+      ui.activeTab = tab;
+      setTabButtons(tab);
+      return;
+    }
+    const targetScroll = options.restoreScroll
+      ? pageScrollPositions.get(target.id) || 0
+      : 0;
+
+    window.clearTimeout(pageTransitionTimer);
+    window.clearTimeout(pageSettleTimer);
+    const token = ++pageTransitionToken;
+
+    document.querySelectorAll(".page").forEach((page) => {
+      if (page !== source && page !== target) {
+        page.hidden = true;
+        page.classList.remove(
+          "is-active",
+          "is-leaving",
+          "is-underlay",
+          "is-fading",
+          "is-fade-out",
+          "no-page-anim",
+          "is-tab-entering"
+        );
+      }
+    });
+
+    if (source) {
+      pageScrollPositions.set(source.id, source.scrollTop);
+    }
+
+    target.hidden = false;
+    target.scrollTop = targetScroll;
+    pageScrollPositions.set(target.id, targetScroll);
+    target.classList.remove(
+      "is-active",
+      "is-leaving",
+      "is-fading",
+      "is-fade-out",
+      "is-tab-entering",
+      "is-page-settling"
+    );
+    target.classList.add("no-page-anim", "is-underlay");
+
+    if (!source) {
+      target.classList.remove("is-underlay", "no-page-anim");
+      target.classList.add("is-active");
+      ui.activeTab = tab;
+      setTabButtons(tab);
+      return;
+    }
+
+    source.hidden = false;
+    source.classList.remove("is-underlay", "no-page-anim");
+    source.classList.add("is-fading");
+    source.classList.remove("is-fade-out");
+
+    ui.activeTab = tab;
+    setTabButtons(tab);
+
+    // Let the destination paint underneath before fading the current page.
+    requestAnimationFrame(() => {
+      if (token !== pageTransitionToken) return;
+      target.classList.add("is-page-settling");
+      requestAnimationFrame(() => {
+        if (token !== pageTransitionToken) return;
+        source.classList.add("is-fade-out");
+      });
+    });
+
+    pageTransitionTimer = window.setTimeout(() => {
+      if (token !== pageTransitionToken) return;
+      source.hidden = true;
+      source.classList.remove(
+        "is-active",
+        "is-fading",
+        "is-fade-out",
+        "is-underlay",
+        "no-page-anim",
+        "is-page-settling"
+      );
+      target.classList.remove("is-underlay", "no-page-anim");
+      target.classList.add("is-active");
+      pageSettleTimer = window.setTimeout(() => {
+        if (token !== pageTransitionToken) return;
+        target.classList.remove("is-page-settling");
+      }, 120);
+    }, 260);
+  }
+
+  function openFullPage(pageId, tab, render) {
+    const target = document.getElementById(pageId);
+    if (!target) return;
+    if (typeof render === "function") render();
+    if (!target.hidden && target.classList.contains("is-active")) {
+      ui.activeTab = tab;
+      setTabButtons(tab);
+      return;
+    }
+    transitionPage(target, tab);
+  }
+
+  function closeFullPageTo(tab) {
+    const source = document.querySelector(".page--fullpage.is-active");
+    if (!source) {
+      switchTab(tab);
+      return;
+    }
+    editingGoalId = null;
+    if (tab === "create") renderGoalList();
+    const target = document.querySelector(`.page[data-page="${tab}"]`);
+    transitionPage(target, tab, { restoreScroll: true });
+  }
+
+  function showSubPage(pageId, tab) {
+    const target = document.getElementById(pageId);
+    if (!target) return;
+    transitionPage(target, tab);
+  }
+
+  function closeSubPage(tab) {
+    const target = document.querySelector(`.page[data-page="${tab}"]`);
+    if (!target) return;
+    transitionPage(target, tab, { restoreScroll: true });
+  }
+
+  function closePageTo(pageId, tab) {
+    const target = document.getElementById(pageId);
+    if (!target) return;
+    transitionPage(target, tab, { restoreScroll: true });
   }
 
   function openHabitsPage() {
@@ -3943,29 +4940,67 @@
     showSubPage("page-lists", "profile");
   }
 
-  function switchTab(tab, options = {}) {
-    if (!["tasks", "create", "profile"].includes(tab)) tab = "tasks";
+  function showTabImmediate(tab) {
+    resetPageTransition();
+    editingGoalId = null;
     ui.activeTab = tab;
-
     document.querySelectorAll(".page").forEach((page) => {
       const active = page.dataset.page === tab;
       page.hidden = !active;
+      page.classList.remove(
+        "is-leaving",
+        "is-underlay",
+        "is-fading",
+        "is-fade-out",
+        "no-page-anim",
+        "is-tab-entering",
+        "is-page-settling"
+      );
       page.classList.toggle("is-active", active);
     });
-    document.querySelectorAll("[data-tab]").forEach((button) => {
-      const active = button.dataset.tab === tab;
-      button.classList.toggle("is-active", active);
-      button.setAttribute("aria-selected", String(active));
-    });
+    setTabButtons(tab);
+    const active = document.querySelector(".page.is-active");
+    scrollPageToTop(active);
+    if (active) pageScrollPositions.set(active.id, 0);
+  }
 
-    if (tab === "tasks") {
-      refreshTasksView({ animate: false });
+  function renderTabRoot(tab) {
+    if (tab === "tasks") refreshTasksView({ animate: false });
+    if (tab === "create") renderGoalList();
+  }
+
+  function switchTab(tab, options = {}) {
+    if (!["tasks", "create", "profile"].includes(tab)) tab = "tasks";
+    const target = document.querySelector(`.page[data-page="${tab}"]`);
+    const current = document.querySelector(".page.is-active:not([hidden])");
+
+    if (
+      !options.initial &&
+      ui.activeTab === tab &&
+      current === target
+    ) {
+      return;
     }
-    if (tab === "create") {
-      renderGoalList();
+    if (
+      !options.initial &&
+      target &&
+      !target.hidden &&
+      !target.classList.contains("is-active")
+    ) {
+      return;
     }
-    if (options.scroll !== false) {
-      screen.scrollTo({ top: 0, behavior: "smooth" });
+
+    editingGoalId = null;
+    renderTabRoot(tab);
+
+    if (options.initial || !current) {
+      showTabImmediate(tab);
+    } else {
+      transitionPage(target, tab);
+    }
+
+    if (options.scroll !== false && (options.initial || !current)) {
+      scrollPageToTop(target, "smooth");
     }
     if (options.updateHash !== false) {
       try {
@@ -3982,6 +5017,15 @@
       button.addEventListener("click", () => {
         switchTab(button.dataset.tab);
       });
+    });
+
+    const progressOrbit = document.querySelector("#progressOrbit");
+    progressOrbit.addEventListener("click", () => openStatsPage("tasks"));
+    progressOrbit.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openStatsPage("tasks");
+      }
     });
 
     document
@@ -4046,6 +5090,181 @@
       if (dragState && !dragState.moved && event.buttons === 0) endDateDrag(event);
     });
 
+    overdueList.addEventListener("click", (event) => {
+      if (event.target.closest("[data-overdue-all]")) {
+        moveAllOverdueTasks();
+        return;
+      }
+      const move = event.target.closest("[data-overdue-move]");
+      if (move) moveOverdueTask(move.dataset.overdueMove);
+    });
+
+    let pendingTaskDrag = null;
+    let taskPressTimer = 0;
+
+    function captureTaskRects(stack) {
+      const rects = new Map();
+      stack.querySelectorAll(".task-card").forEach((card) => {
+        rects.set(card, card.getBoundingClientRect());
+      });
+      return rects;
+    }
+
+    function animateTaskShift(previousRects, stack, draggedCard) {
+      stack.querySelectorAll(".task-card").forEach((card) => {
+        if (card === draggedCard) return;
+        const previous = previousRects.get(card);
+        if (!previous) return;
+        const current = card.getBoundingClientRect();
+        const deltaY = previous.top - current.top;
+        if (Math.abs(deltaY) < 0.5) return;
+        card.classList.remove("is-sort-shifting");
+        card.style.transition = "none";
+        card.style.transform = `translateY(${deltaY}px)`;
+        // Force the inverted position to paint before releasing it.
+        void card.offsetHeight;
+        card.classList.add("is-sort-shifting");
+        card.style.transition = "";
+        card.style.transform = "";
+        window.setTimeout(() => {
+          card.classList.remove("is-sort-shifting");
+        }, 220);
+      });
+    }
+
+    taskList.addEventListener("pointerdown", (event) => {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      const menuButton = event.target.closest(".task-menu");
+      if (!menuButton) return;
+      const card = menuButton.closest(".task-card");
+      if (!card || card.classList.contains("is-done")) return;
+      const stack = card.closest(".task-stack");
+      if (!stack) return;
+      pendingTaskDrag = {
+        card,
+        stack,
+        x: event.clientX,
+        y: event.clientY,
+        pointerId: event.pointerId,
+      };
+      window.clearTimeout(taskPressTimer);
+      taskPressTimer = window.setTimeout(() => {
+        if (!pendingTaskDrag) return;
+        const drag = pendingTaskDrag;
+        pendingTaskDrag = null;
+        const rect = drag.card.getBoundingClientRect();
+        drag.baseX = rect.left;
+        drag.baseY = rect.top;
+        drag.offsetX = drag.x - rect.left;
+        drag.offsetY = drag.y - rect.top;
+        const ghost = drag.card.cloneNode(true);
+        ghost.classList.remove("is-dragging", "is-sort-shifting");
+        ghost.classList.add("task-drag-ghost");
+        ghost.setAttribute("aria-hidden", "true");
+        ghost.inert = true;
+        ghost.style.width = `${rect.width}px`;
+        ghost.style.height = `${rect.height}px`;
+        ghost.style.left = `${rect.left}px`;
+        ghost.style.top = `${rect.top}px`;
+        document.body.appendChild(ghost);
+        drag.ghost = ghost;
+        taskDragState = drag;
+        suppressTaskClickUntil = Date.now() + 900;
+        drag.card.classList.add("is-dragging");
+        if (navigator.vibrate) navigator.vibrate(12);
+        try {
+          drag.card.setPointerCapture(drag.pointerId);
+        } catch (error) {
+          // Pointer capture is best-effort.
+        }
+      }, 430);
+    });
+
+    document.addEventListener("pointermove", (event) => {
+      if (
+        pendingTaskDrag &&
+        event.pointerId === pendingTaskDrag.pointerId &&
+        (Math.abs(event.clientX - pendingTaskDrag.x) > 8 ||
+          Math.abs(event.clientY - pendingTaskDrag.y) > 8)
+      ) {
+        window.clearTimeout(taskPressTimer);
+        pendingTaskDrag = null;
+      }
+      if (!taskDragState || event.pointerId !== taskDragState.pointerId) {
+        return;
+      }
+      const { card, stack, ghost, baseX, baseY, offsetX, offsetY } =
+        taskDragState;
+      if (ghost) {
+        const dx = event.clientX - offsetX - baseX;
+        const dy = event.clientY - offsetY - baseY;
+        ghost.style.transform = `translate3d(${dx}px, ${dy}px, 0) scale(1.02)`;
+      }
+      const cards = [...stack.querySelectorAll(".task-card")].filter(
+        (item) => item !== card
+      );
+      const target = cards.find((item) => {
+        const rect = item.getBoundingClientRect();
+        return event.clientY < rect.top + rect.height / 2;
+      });
+      const previousRects = captureTaskRects(stack);
+      if (target) {
+        stack.insertBefore(card, target);
+      } else {
+        stack.appendChild(card);
+      }
+      animateTaskShift(previousRects, stack, card);
+    });
+
+    const finishTaskDrag = () => {
+      window.clearTimeout(taskPressTimer);
+      pendingTaskDrag = null;
+      if (!taskDragState) return;
+      const { card, stack, ghost, baseX, baseY } = taskDragState;
+      card.classList.remove("is-dragging");
+      taskDragState = null;
+      [...stack.querySelectorAll(".task-card")].forEach((item, index) => {
+        const task = state.tasks.find(
+          (candidate) => candidate.id === item.dataset.taskId
+        );
+        if (task) task.order = index;
+      });
+      saveState();
+      suppressTaskClickUntil = Date.now() + 350;
+
+      if (ghost) {
+        const finalRect = card.getBoundingClientRect();
+        const currentRect = ghost.getBoundingClientRect();
+        const fromX = currentRect.left - baseX;
+        const fromY = currentRect.top - baseY;
+        const toX = finalRect.left - baseX;
+        const toY = finalRect.top - baseY;
+        const animation = ghost.animate(
+          [
+            {
+              transform: `translate3d(${fromX}px, ${fromY}px, 0) scale(1.02)`,
+              opacity: 1,
+            },
+            {
+              transform: `translate3d(${toX}px, ${toY}px, 0) scale(1)`,
+              opacity: 0,
+            },
+          ],
+          {
+            duration: 200,
+            easing: "cubic-bezier(0.34, 1.18, 0.64, 1)",
+            fill: "forwards",
+          }
+        );
+        animation.addEventListener("finish", () => ghost.remove(), {
+          once: true,
+        });
+        window.setTimeout(() => ghost.remove(), 240);
+      }
+    };
+    document.addEventListener("pointerup", finishTaskDrag);
+    document.addEventListener("pointercancel", finishTaskDrag);
+
     taskList.addEventListener("click", (event) => {
       if (Date.now() < suppressTaskClickUntil) return;
       const action = event.target.closest("[data-action]");
@@ -4060,7 +5279,7 @@
         return;
       }
       if (action.dataset.action === "menu") {
-        if (card) toggleTaskDetails(card.dataset.taskId, card);
+        if (card) openTaskActionMenu(card.dataset.taskId);
         return;
       }
       if (action.dataset.action === "collapse") {
@@ -4088,6 +5307,29 @@
         if (card) openDeleteTaskConfirm(card.dataset.taskId);
         return;
       }
+      if (action.dataset.action === "subtask-toggle") {
+        if (!card) return;
+        const task = state.tasks.find(
+          (item) => item.id === card.dataset.taskId
+        );
+        const subtask = task?.subtasks?.find(
+          (item) => item.id === action.dataset.subtaskId
+        );
+        if (task && subtask) {
+          subtask.done = !subtask.done;
+          const allDone =
+            task.subtasks.length > 0 &&
+            task.subtasks.every((item) => item.done);
+          if (allDone && !task.done) {
+            saveState();
+            toggleTask(task.id, card);
+          } else {
+            saveState();
+            refreshTasksView({ animate: false });
+          }
+        }
+        return;
+      }
       if (action.dataset.action === "add") {
         openTaskForm();
         return;
@@ -4099,51 +5341,12 @@
       }
     });
 
-    // Long press a task to edit it.
-    let pressTimer = 0;
-    let pressState = null;
-    const clearPress = () => {
-      if (pressTimer) {
-        window.clearTimeout(pressTimer);
-        pressTimer = 0;
-      }
-      pressState = null;
-    };
-
-    taskList.addEventListener("pointerdown", (event) => {
-      if (event.pointerType === "mouse" && event.button !== 0) return;
-      const card = event.target.closest(".task-card");
-      if (!card || card.classList.contains("is-done") || event.target.closest("button")) {
+    taskList.addEventListener("contextmenu", (event) => {
+      if (taskDragState || pendingTaskDrag) return;
+      if (event.target.closest(".task-menu")) {
+        event.preventDefault();
         return;
       }
-      pressState = {
-        x: event.clientX,
-        y: event.clientY,
-        id: card.dataset.taskId,
-      };
-      pressTimer = window.setTimeout(() => {
-        if (!pressState) return;
-        if (navigator.vibrate) navigator.vibrate(14);
-        suppressTaskClickUntil = Date.now() + 700;
-        openTaskForm(pressState.id);
-        pressTimer = 0;
-        pressState = null;
-      }, 520);
-    });
-
-    window.addEventListener("pointermove", (event) => {
-      if (!pressState) return;
-      if (
-        Math.abs(event.clientX - pressState.x) > 9 ||
-        Math.abs(event.clientY - pressState.y) > 9
-      ) {
-        clearPress();
-      }
-    });
-    window.addEventListener("pointerup", clearPress);
-    window.addEventListener("pointercancel", clearPress);
-
-    taskList.addEventListener("contextmenu", (event) => {
       const card = event.target.closest(".task-card");
       if (!card || card.classList.contains("is-done")) return;
       event.preventDefault();
@@ -4159,6 +5362,9 @@
       if (action.dataset.action === "goal-menu") {
         openGoalActions(goalCard.dataset.goalId);
       }
+      if (action.dataset.action === "goal-color") {
+        openGoalColorPicker(goalCard.dataset.goalId);
+      }
       if (action.dataset.action === "goal-plan") {
         toggleGoalPlan(goalCard.dataset.goalId);
       }
@@ -4172,13 +5378,13 @@
       .addEventListener("click", () => openHabitForm());
     document
       .querySelector("#habitBack")
-      .addEventListener("click", () => switchTab("create"));
+      .addEventListener("click", () => closeSubPage("create"));
     document
       .querySelector("#newListPage")
       .addEventListener("click", () => openListEditor());
     document
       .querySelector("#listsBack")
-      .addEventListener("click", () => switchTab("profile"));
+      .addEventListener("click", () => closeSubPage("profile"));
     document
       .querySelector("#addListPageBtn")
       .addEventListener("click", () => openListEditor());
@@ -4187,6 +5393,11 @@
       .addEventListener("click", openGoalWizard);
 
     habitList.addEventListener("click", (event) => {
+      const color = event.target.closest("[data-habit-color]");
+      if (color) {
+        openHabitColorPicker(color.dataset.habitColor);
+        return;
+      }
       const menu = event.target.closest("[data-habit-menu]");
       if (menu) {
         openHabitActions(menu.dataset.habitMenu);
@@ -4196,16 +5407,42 @@
     document.querySelectorAll("[data-profile-action]").forEach((button) => {
       button.addEventListener("click", () => {
         const action = button.dataset.profileAction;
-        if (action === "stats") openStatsSheet();
+        if (action === "stats") openStatsPage("profile");
         if (action === "lists") openListManager();
-        if (action === "data") openDataSheet();
-        if (action === "settings") openSettingsSheet();
+        if (action === "data") openDataPage();
+        if (action === "settings") openSettingsPage();
       });
+    });
+
+    globalSearchInput.addEventListener("input", renderGlobalSearch);
+    clearGlobalSearch.addEventListener("click", () => {
+      globalSearchInput.value = "";
+      renderGlobalSearch();
+      globalSearchInput.focus();
+    });
+    globalSearchResults.addEventListener("click", (event) => {
+      const result = event.target.closest("[data-search-type]");
+      if (result) {
+        openSearchResult(result.dataset.searchType, result.dataset.searchId);
+      }
     });
 
     overlay.addEventListener("click", (event) => {
       if (Date.now() - sheetOpenedAt < 280) return;
       if (event.target.closest("[data-close-sheet]")) closeSheet();
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest("[data-close-fullpage]")) return;
+      const page = event.target.closest(".page--fullpage");
+      if (!page) return;
+      const tab =
+        page.id === "page-goal"
+          ? "create"
+          : page.id === "page-stats"
+            ? page.dataset.returnTab || "profile"
+            : "profile";
+      closeFullPageTo(tab);
     });
 
     calendarLayer.addEventListener("click", (event) => {
@@ -4237,15 +5474,16 @@
       // Capacitor's naming is counter-intuitive: Style.Light = dark icons
       // for light backgrounds. The app is always light, so keep icons dark.
       const applyStatusBar = () => {
+        const dark = effectiveThemeIsDark();
         Promise.resolve(
           StatusBar.setOverlaysWebView({ overlay: false })
         ).catch(() => {});
         Promise.resolve(
-          StatusBar.setBackgroundColor({ color: "#f4f6fb" })
+          StatusBar.setBackgroundColor({ color: dark ? "#11151d" : "#f4f6fb" })
         ).catch(() => {});
-        Promise.resolve(StatusBar.setStyle({ style: "LIGHT" })).catch(
-          () => {}
-        );
+        Promise.resolve(
+          StatusBar.setStyle({ style: dark ? "DARK" : "LIGHT" })
+        ).catch(() => {});
       };
       applyStatusBar();
       if (App) {
@@ -4267,12 +5505,29 @@
           setTaskDetailOpen(ui.expandedTaskId, false);
           return;
         }
+        const fullPage = document.querySelector(
+          ".page--fullpage.is-active:not([hidden])"
+        );
+        if (fullPage) {
+          const tab =
+            fullPage.id === "page-goal"
+              ? "create"
+              : fullPage.id === "page-stats"
+                ? fullPage.dataset.returnTab || "profile"
+                : "profile";
+          closeFullPageTo(tab);
+          return;
+        }
         if (!habitsPage.hidden) {
-          switchTab("create");
+          closeSubPage("create");
           return;
         }
         if (!listsPage.hidden) {
-          switchTab("profile");
+          closeSubPage("profile");
+          return;
+        }
+        if (!listDetailPage.hidden) {
+          closePageTo("page-lists", "profile");
           return;
         }
         if (ui.activeTab !== "tasks") {
@@ -4286,6 +5541,8 @@
 
   function init() {
     applyFontScale();
+    applyTheme();
+    setupThemeWatcher();
     setupKeyboardViewport();
     ensureHabitTasks(ui.selectedDate);
     renderDateStrip();
@@ -4293,7 +5550,7 @@
     renderTaskHeader();
     renderTaskList({ animate: true });
     bindGlobalEvents();
-    switchTab(initialTab, { updateHash: false, scroll: false });
+    switchTab(initialTab, { initial: true, updateHash: false, scroll: false });
     setupNativeShell();
     requestAnimationFrame(() => {
       scrollSelectedDate(false);
