@@ -5,8 +5,8 @@ ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / "assets"
 ASSETS.mkdir(exist_ok=True)
 
-BLUE_TOP = (124, 148, 255)
-BLUE_BOTTOM = (84, 110, 238)
+BLUE_TOP = (130, 152, 255)
+BLUE_BOTTOM = (90, 114, 238)
 INK = (27, 34, 51)
 MUTED = (125, 135, 155)
 BG = (244, 246, 251)
