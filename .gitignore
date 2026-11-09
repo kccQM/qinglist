@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+mobile/node_modules/
+
+# Generated web assets and build output
+mobile/www/
+mobile/dist/
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/local.properties
+mobile/android/capacitor-cordova-android-plugins/
+mobile/android/app/src/main/assets/public/
+mobile/android/app/src/main/assets/capacitor.config.json
+mobile/android/app/src/main/assets/capacitor.plugins.json
+mobile/android/app/src/main/res/xml/config.xml
+
+# Signing secrets — never commit
+*.jks
+*.keystore
+keystore.properties
+
+# APK/AAB — publish through GitHub Releases
+*.apk
+*.aab
+
+# Logs
+*.log
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

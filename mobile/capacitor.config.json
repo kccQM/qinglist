@@ -1,0 +1,9 @@
+{
+  "appId": "com.qinglist.app",
+  "appName": "轻清单",
+  "webDir": "www",
+  "backgroundColor": "#f4f6fb",
+  "android": {
+    "allowMixedContent": false
+  }
+}
