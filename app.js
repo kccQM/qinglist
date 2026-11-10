@@ -5962,7 +5962,7 @@
               <span class="settings-toggle-chevron">${ICONS.chevron}</span>
             </button>
           </div>
-          <div class="settings-about">轻清单 1.13.9</div>
+          <div class="settings-about">轻清单 1.13.10</div>
         </div>
       </div>`;
 

@@ -119,4 +119,4 @@ npm run build:debug
 
 ## 版本
 
-当前版本：`1.13.9`。版本说明见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本：`1.13.10`。版本说明见 [CHANGELOG.md](CHANGELOG.md)。

@@ -8190,3 +8190,4 @@ html[data-theme="dark"] .stats-detail-row-head { color: var(--ink-soft); }
 .reminder-sound-row > svg { width: 16px; height: 16px; flex: 0 0 16px; color: var(--accent); }
 html[data-theme="dark"] .reminder-sound-row { border-color: var(--line); background: #151c28; color: var(--ink); }
 html[data-theme="dark"] .reminder-sound-row.is-selected { border-color: var(--accent); background: #1b2540; }
+.stats-detail-content .stats-empty { margin-top: 13px; }
