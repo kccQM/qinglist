@@ -1,6 +1,6 @@
 {
   "name": "qinglist-mobile",
-  "version": "1.12.9",
+  "version": "1.13.9",
   "private": true,
   "description": "轻清单 Android 离线应用",
   "scripts": {

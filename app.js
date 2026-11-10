@@ -132,6 +132,21 @@
     return keyOf(addDaysDate(parseKey(key), amount));
   }
 
+  function addMonthsKey(key, amount) {
+    const date = parseKey(key);
+    const day = date.getDate();
+    const next = new Date(date.getFullYear(), date.getMonth() + amount, 1, 12);
+    const last = new Date(next.getFullYear(), next.getMonth() + 1, 0, 12).getDate();
+    next.setDate(Math.min(day, last));
+    return keyOf(next);
+  }
+
+  function nextRepeatKey(key, type) {
+    if (type === "weekly") return addDaysKey(key, 7);
+    if (type === "monthly") return addMonthsKey(key, 1);
+    return addDaysKey(key, 1);
+  }
+
   function diffDays(startKey, endKey) {
     return Math.round((parseKey(endKey) - parseKey(startKey)) / 86400000);
   }
@@ -159,7 +174,10 @@
     const scale = FONT_SCALE_OPTIONS.some((option) => option.value === value)
       ? value
       : FONT_SCALE_DEFAULT;
-    document.documentElement.style.setProperty("--font-scale", String(scale));
+    document.documentElement.style.setProperty(
+      "--font-scale",
+      String(scale * 1.055)
+    );
   }
 
   function effectiveThemeIsDark() {
@@ -467,7 +485,34 @@
     };
     render();
 
+    let swipeStart = null;
+    let swiped = false;
+    panel.addEventListener("pointerdown", (event) => {
+      swipeStart = { x: event.clientX, y: event.clientY };
+      swiped = false;
+    }, { passive: true });
+    panel.addEventListener("pointermove", (event) => {
+      if (!swipeStart) return;
+      const dx = event.clientX - swipeStart.x;
+      const dy = event.clientY - swipeStart.y;
+      if (Math.abs(dx) < 44 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
+      state.view = shiftMonthKey(state.view, dx < 0 ? 1 : -1);
+      swipeStart = null;
+      swiped = true;
+      render();
+    }, { passive: true });
+    panel.addEventListener("pointerup", () => {
+      swipeStart = null;
+    }, { passive: true });
+    panel.addEventListener("pointercancel", () => {
+      swipeStart = null;
+    }, { passive: true });
+
     panel.onclick = (event) => {
+      if (swiped) {
+        swiped = false;
+        return;
+      }
       if (event.target.closest("[data-cal-prev]")) {
         state.view = shiftMonthKey(state.view, -1);
         render();
@@ -519,6 +564,119 @@
     });
 
     if (trigger) trigger.setAttribute("aria-expanded", "true");
+  }
+
+  function openHabitMonthlyPicker(initial, onApply, trigger = null) {
+    window.clearTimeout(calendarCloseTimer);
+    calendarLayer.hidden = false;
+    calendarLayer.classList.remove("is-closing");
+    calendarLayer.classList.add("is-open");
+    calendarOpenTrigger = trigger;
+    calendarSelectionHandler = onApply;
+    if (trigger) trigger.setAttribute("aria-expanded", "true");
+    if (calendarDialogTitle) calendarDialogTitle.textContent = "设置每月重复";
+    let monthDays = Array.isArray(initial?.monthDays) ? [...initial.monthDays] : [];
+    let mode = initial?.mode === "count" ? "count" : "days";
+    let monthlyTarget = Math.max(1, Math.min(31, Number(initial?.monthlyTarget) || 8));
+    let monthCursor = new Date(
+      new Date().getFullYear(),
+      new Date().getMonth(),
+      1,
+      12
+    );
+    const render = () => {
+      const year = monthCursor.getFullYear();
+      const month = monthCursor.getMonth();
+      const first = new Date(year, month, 1, 12);
+      const offset = (first.getDay() + 6) % 7;
+      let day = addDaysDate(first, -offset);
+      const cells = [];
+      for (let index = 0; index < 42; index += 1) {
+        const inMonth = day.getMonth() === month;
+        const dateNumber = day.getDate();
+        cells.push(
+          inMonth
+            ? `<button class="habit-month-day ${
+                monthDays.includes(dateNumber) ? "is-selected" : ""
+              }" type="button" data-monthly-day="${dateNumber}">${dateNumber}</button>`
+            : `<span class="habit-month-day is-empty"></span>`
+        );
+        day = addDaysDate(day, 1);
+      }
+      const targetButtons = Array.from({ length: 31 }, (_, index) => {
+        const value = index + 1;
+        return `<button class="${value === monthlyTarget ? "is-selected" : ""}" type="button" data-monthly-target="${value}">${value}</button>`;
+      }).join("");
+      const calendarHtml =
+        mode === "count"
+          ? `<div class="monthly-count-only">已切换为按每月次数，选择每月需要完成的次数。</div>`
+          : `<div class="monthly-picker-head">
+              <button type="button" data-monthly-prev aria-label="上个月">‹</button>
+              <strong>${year}年${month + 1}月</strong>
+              <button type="button" data-monthly-next aria-label="下个月">›</button>
+            </div>
+            <div class="habit-month-weekdays"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
+            <div class="habit-month-grid monthly-picker-grid">${cells.join("")}</div>`;
+      calendarHost.innerHTML = `<div class="monthly-picker-popup">
+        ${calendarHtml}
+        <button class="habit-count-toggle ${mode === "count" ? "is-on" : ""}" type="button" id="monthlyCountToggle" aria-pressed="${mode === "count"}">
+          <span class="habit-count-check">${mode === "count" ? ICONS.check : ""}</span>
+          <span>按每月次数</span>
+        </button>
+        <div class="monthly-target-panel" ${mode === "count" ? "" : "hidden"}>
+          <p class="time-picker-tip">每月完成次数</p>
+          <div class="monthly-target-chips">${targetButtons}</div>
+        </div>
+        <button class="time-confirm" type="button" id="monthlyPickerDone">确定</button>
+      </div>`;
+      bind();
+    };
+    const bind = () => {
+      calendarHost.querySelectorAll("[data-monthly-prev]").forEach((button) => {
+        button.addEventListener("click", () => {
+          monthCursor = new Date(monthCursor.getFullYear(), monthCursor.getMonth() - 1, 1, 12);
+          render();
+        });
+      });
+      calendarHost.querySelectorAll("[data-monthly-next]").forEach((button) => {
+        button.addEventListener("click", () => {
+          monthCursor = new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1, 12);
+          render();
+        });
+      });
+      calendarHost.querySelectorAll("[data-monthly-day]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const value = Number(button.dataset.monthlyDay);
+          if (monthDays.includes(value)) {
+            if (monthDays.length === 1) return;
+            monthDays = monthDays.filter((day) => day !== value);
+          } else {
+            monthDays = [...monthDays, value];
+          }
+          render();
+        });
+      });
+      calendarHost.querySelector("#monthlyCountToggle")?.addEventListener("click", () => {
+        mode = mode === "count" ? "days" : "count";
+        render();
+      });
+      calendarHost.querySelectorAll("[data-monthly-target]").forEach((button) => {
+        button.addEventListener("click", () => {
+          monthlyTarget = Number(button.dataset.monthlyTarget);
+          render();
+        });
+      });
+      calendarHost.querySelector("#monthlyPickerDone")?.addEventListener("click", () => {
+        const handler = calendarSelectionHandler;
+        closeCalendarPicker();
+        handler?.({
+          monthDays: [...monthDays],
+          mode,
+          monthlyTarget,
+        });
+      });
+    };
+    render();
   }
 
   function closeCalendarPicker() {
@@ -632,6 +790,7 @@
       habitSkips: [],
       lists: makeDefaultLists(),
       settings: { ...DEFAULT_SETTINGS },
+      trash: [],
     };
   }
 
@@ -704,6 +863,19 @@
           .filter((item) => item.title);
         return {
           ...rest,
+          repeat:
+            task.repeat && ["daily", "weekly", "monthly"].includes(task.repeat.type)
+              ? {
+                  type: task.repeat.type,
+                  endDate: /^\d{4}-\d{2}-\d{2}$/.test(task.repeat.endDate || "")
+                    ? task.repeat.endDate
+                    : "",
+                  seriesId:
+                    typeof task.repeat.seriesId === "string"
+                      ? task.repeat.seriesId
+                      : uid("series"),
+                }
+              : null,
           subtasks,
           order:
             typeof task.order === "number" && Number.isFinite(task.order)
@@ -713,12 +885,41 @@
             ? task.listId
             : listByName.get(tag) || fallbackListId,
         };
-      });
+      })
+      .filter(
+        (() => {
+          const seenTaskIds = new Set();
+          const seenHabitDates = new Set();
+          const seenSeriesDates = new Set();
+          const seenTitleDates = new Set();
+          return (task) => {
+            if (task.id && seenTaskIds.has(task.id)) return false;
+            if (task.id) seenTaskIds.add(task.id);
+            if (task.habitId) {
+              const key = `${task.habitId}:${task.date}`;
+              if (seenHabitDates.has(key)) return false;
+              seenHabitDates.add(key);
+            }
+            if (task.repeat?.seriesId) {
+              const key = `${task.repeat.seriesId}:${task.date}`;
+              if (seenSeriesDates.has(key)) return false;
+              seenSeriesDates.add(key);
+            }
+            if (!task.goalId && !task.habitId && !task.repeat) {
+              const key = `${task.title.trim()}:${task.date}:${task.listId}`;
+              if (seenTitleDates.has(key)) return false;
+              seenTitleDates.add(key);
+            }
+            return true;
+          };
+        })()
+      );
 
     const goals = (Array.isArray(raw?.goals) ? raw.goals : [])
       .filter((goal) => goal && typeof goal.title === "string")
       .map((goal) => ({
         ...goal,
+        paused: goal.paused === true,
         listId: validListIds.has(goal.listId)
           ? goal.listId
           : fallbackGoalListId,
@@ -732,12 +933,18 @@
           ? habit.color
           : stableHabitColor(habit.id),
         repeat: {
-          type: ["daily", "weekly"].includes(habit.repeat?.type)
+          type: ["daily", "weekly", "monthly"].includes(habit.repeat?.type)
             ? habit.repeat.type
             : "daily",
           weekdays: Array.isArray(habit.repeat?.weekdays)
             ? habit.repeat.weekdays.filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
             : [],
+          monthDays: Array.isArray(habit.repeat?.monthDays)
+            ? habit.repeat.monthDays.filter((day) => Number.isInteger(day) && day >= 1 && day <= 31)
+            : [],
+          mode: habit.repeat?.mode === "count" ? "count" : "days",
+          weeklyTarget: Math.max(1, Math.min(7, Number(habit.repeat?.weeklyTarget) || 3)),
+          monthlyTarget: Math.max(1, Math.min(31, Number(habit.repeat?.monthlyTarget) || 8)),
           endDate: /^\d{4}-\d{2}-\d{2}$/.test(habit.repeat?.endDate || "")
             ? habit.repeat.endDate
             : "",
@@ -750,6 +957,10 @@
       .filter((key) => typeof key === "string")
       .slice(-500);
 
+    const trash = (Array.isArray(raw?.trash) ? raw.trash : [])
+      .filter((entry) => entry && typeof entry.type === "string" && entry.item)
+      .slice(0, 100);
+
     return {
       tasks,
       goals,
@@ -757,6 +968,7 @@
       habitSkips,
       lists,
       settings: normalizeSettings(raw?.settings),
+      trash,
     };
   }
 
@@ -766,7 +978,9 @@
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && Array.isArray(parsed.tasks) && Array.isArray(parsed.goals)) {
-          return normalizeStateData(parsed);
+          const normalized = normalizeStateData(parsed);
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+          return normalized;
         }
       }
     } catch (error) {
@@ -812,21 +1026,101 @@
     const repeat = habitRepeat(habit);
     if (repeat.endDate && dateKey > repeat.endDate) return false;
     if (repeat.type === "weekly") {
+      if (repeat.mode === "count") return true;
       const day = parseKey(dateKey).getDay();
       return (repeat.weekdays || [day]).includes(day);
     }
+    if (repeat.type === "monthly") {
+      if (repeat.mode === "count") return true;
+      const day = parseKey(dateKey).getDate();
+      return (repeat.monthDays || [day]).includes(day);
+    }
+    return true;
+  }
+
+  function habitPeriodDone(habitId, dateKey = todayKey(), type = "weekly") {
+    let start;
+    let end;
+    if (type === "monthly") {
+      const date = parseKey(dateKey);
+      start = keyOf(new Date(date.getFullYear(), date.getMonth(), 1, 12));
+      end = keyOf(new Date(date.getFullYear(), date.getMonth() + 1, 0, 12));
+    } else {
+      start = startOfWeekKey(dateKey);
+      end = addDaysKey(start, 6);
+    }
+    return state.tasks.filter(
+      (task) =>
+        task.habitId === habitId &&
+        task.done &&
+        task.date >= start &&
+        task.date <= end
+    ).length;
+  }
+
+  function habitWeeklyDone(habitId, dateKey = todayKey()) {
+    return habitPeriodDone(habitId, dateKey, "weekly");
+  }
+
+  function habitTarget(habit) {
+    const repeat = habitRepeat(habit);
+    return repeat.type === "monthly"
+      ? Math.max(1, Number(repeat.monthlyTarget) || 8)
+      : Math.max(1, Number(repeat.weeklyTarget) || 3);
+  }
+
+  function pruneHabitPeriodTasks(habit) {
+    if (!habit) return false;
+    const repeat = habitRepeat(habit);
+    if (repeat.mode !== "count" || !["weekly", "monthly"].includes(repeat.type)) {
+      return false;
+    }
+    const today = todayKey();
+    if (habitPeriodDone(habit.id, today, repeat.type) < habitTarget(habit)) {
+      return false;
+    }
+    let start;
+    let end;
+    if (repeat.type === "monthly") {
+      const date = parseKey(today);
+      start = keyOf(new Date(date.getFullYear(), date.getMonth(), 1, 12));
+      end = keyOf(new Date(date.getFullYear(), date.getMonth() + 1, 0, 12));
+    } else {
+      start = startOfWeekKey(today);
+      end = addDaysKey(start, 6);
+    }
+    const removed = state.tasks.filter(
+      (task) =>
+        task.habitId === habit.id &&
+        !task.done &&
+        task.date > today &&
+        task.date >= start &&
+        task.date <= end
+    );
+    if (!removed.length) return false;
+    state.tasks = state.tasks.filter((task) => !removed.includes(task));
+    saveState();
     return true;
   }
 
   function habitRepeatLabel(habit) {
     const repeat = habitRepeat(habit);
     if (repeat.type === "weekly") {
+      if (repeat.mode === "count") return `每周 ${habitTarget(habit)} 次`;
       const names = ["日", "一", "二", "三", "四", "五", "六"];
       const days = [...(repeat.weekdays || [])]
         .sort((a, b) => a - b)
         .map((day) => `周${names[day]}`)
         .join("、");
       return days ? `每${days}` : "每周";
+    }
+    if (repeat.type === "monthly") {
+      if (repeat.mode === "count") return `每月 ${habitTarget(habit)} 次`;
+      const days = [...(repeat.monthDays || [])]
+        .sort((a, b) => a - b)
+        .map((day) => `${day}日`)
+        .join("、");
+      return days ? `每月 ${days}` : "每月";
     }
     return "每天";
   }
@@ -840,6 +1134,14 @@
     state.habits.forEach((habit, index) => {
       if (!habitMatchesDate(habit, dateKey)) return;
       if (skipped.has(habitSkipKey(habit.id, dateKey))) return;
+      const repeat = habitRepeat(habit);
+      if (
+        repeat.mode === "count" &&
+        ["weekly", "monthly"].includes(repeat.type) &&
+        habitPeriodDone(habit.id, dateKey, repeat.type) >= habitTarget(habit)
+      ) {
+        return;
+      }
       const exists = state.tasks.some(
         (task) => task.habitId === habit.id && task.date === dateKey
       );
@@ -965,8 +1267,12 @@
     expandedTaskId: null,
     activeListId: null,
     listSelected: new Set(),
+    searchSelected: new Set(),
+    listQuery: "",
     rangeStart: addDaysKey(todayKey(), -45),
     rangeEnd: addDaysKey(todayKey(), 45),
+    monthExpanded: false,
+    monthCursor: todayKey(),
   };
 
   let goalDraft = null;
@@ -979,13 +1285,21 @@
   let calendarSelectionHandler = null;
   let calendarCloseTimer = 0;
   let suppressTaskClickUntil = 0;
+  let suppressTabClickUntil = 0;
   let taskDragState = null;
 
   // ---------- DOM ----------
   const screen = document.querySelector("#screen");
+  const tabbar = document.querySelector(".tabbar");
   const overlay = document.querySelector("#overlay");
   const sheet = document.querySelector("#sheet");
   const dateStrip = document.querySelector("#dateStrip");
+  const dateStripShell = document.querySelector(".date-strip-shell");
+  const monthView = document.querySelector("#monthView");
+  const monthGrid = document.querySelector("#monthGrid");
+  const monthViewLabel = document.querySelector("#monthViewLabel");
+  const monthPullHandle = document.querySelector("#monthPullHandle");
+  const taskContent = document.querySelector("#taskContent");
   const taskList = document.querySelector("#taskList");
   const overdueList = document.querySelector("#overdueList");
   const toast = document.querySelector("#toast");
@@ -999,9 +1313,15 @@
   const listDetailPage = document.querySelector("#page-list-detail");
   const goalPage = document.querySelector("#page-goal");
   const statsPage = document.querySelector("#page-stats");
+  const statsDetailPage = document.querySelector("#page-stats-detail");
   const dataPage = document.querySelector("#page-data");
+  const archivePage = document.querySelector("#page-archive");
+  const trashPage = document.querySelector("#page-trash");
   const settingsPage = document.querySelector("#page-settings");
+  const guidePage = document.querySelector("#page-guide");
   const listManagerContent = document.querySelector("#listManagerContent");
+  const listSearchInput = document.querySelector("#listSearchInput");
+  const clearListSearch = document.querySelector("#clearListSearch");
   const listDetailTitle = document.querySelector("#listDetailTitle");
   const listDetailIntro = document.querySelector("#listDetailIntro");
   const listDetailContent = document.querySelector("#listDetailContent");
@@ -1062,6 +1382,128 @@
         state.tasks.some((task) => task.date === chip.dataset.date)
       );
     });
+  }
+
+  function renderMonthView() {
+    if (!monthView || !monthGrid) return;
+    const cursor = parseKey(ui.monthCursor || ui.selectedDate);
+    const year = cursor.getFullYear();
+    const month = cursor.getMonth();
+    const first = new Date(year, month, 1, 12);
+    const offset = (first.getDay() + 6) % 7;
+    let day = addDaysDate(first, -offset);
+    const today = todayKey();
+    const cells = [];
+    for (let index = 0; index < 42; index += 1) {
+      const key = keyOf(day);
+      const dateTasks = state.tasks.filter((task) => task.date === key);
+      const open = dateTasks.filter((task) => !task.done).length;
+      const complete = dateTasks.length > 0 && open === 0;
+      cells.push(
+        `<button class="month-day ${
+          day.getMonth() === month ? "" : "is-outside"
+        } ${key === ui.selectedDate ? "is-selected" : ""} ${
+          key === today ? "is-today" : ""
+        } ${dateTasks.length ? "has-tasks" : ""} ${
+          complete ? "is-complete" : ""
+        }" type="button" data-month-date="${key}" aria-label="${day.getMonth() + 1}月${day.getDate()}日，${
+          complete ? "已完成" : `${open} 项待办`
+        }">
+          <span>${day.getDate()}</span>
+          ${dateTasks.length ? `<i class="month-dot" aria-hidden="true"></i>` : ""}
+        </button>`
+      );
+      day = addDaysDate(day, 1);
+    }
+    monthViewLabel.textContent = `${year}年${month + 1}月`;
+    monthGrid.innerHTML = cells.join("");
+  }
+
+  function setMonthExpanded(expanded) {
+    if (!monthView || !taskContent) return;
+    ui.monthExpanded = Boolean(expanded);
+    if (ui.monthExpanded) {
+      ui.monthCursor = ui.selectedDate;
+      renderMonthView();
+    }
+    monthView.hidden = !ui.monthExpanded;
+    taskContent.hidden = ui.monthExpanded;
+    document.querySelector("#page-tasks")?.classList.toggle(
+      "is-month-expanded",
+      ui.monthExpanded
+    );
+    if (monthPullHandle) {
+      monthPullHandle.setAttribute("aria-expanded", String(ui.monthExpanded));
+      monthPullHandle.querySelector(".month-pull-text").textContent =
+        ui.monthExpanded ? "上拉收起月视图" : "下拉展开月视图";
+    }
+  }
+
+  function bindMonthView() {
+    if (!monthView || !monthGrid || !monthPullHandle) return;
+    monthPullHandle.addEventListener("click", () => {
+      setMonthExpanded(!ui.monthExpanded);
+    });
+    monthPullHandle.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        setMonthExpanded(!ui.monthExpanded);
+      }
+    });
+
+    document.querySelector("#monthPrev")?.addEventListener("click", () => {
+      ui.monthCursor = addMonthsKey(ui.monthCursor, -1);
+      renderMonthView();
+    });
+    document.querySelector("#monthNext")?.addEventListener("click", () => {
+      ui.monthCursor = addMonthsKey(ui.monthCursor, 1);
+      renderMonthView();
+    });
+    monthGrid.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-month-date]");
+      if (!button) return;
+      selectDate(button.dataset.monthDate, { force: true });
+      setMonthExpanded(false);
+    });
+
+    let start = null;
+    const onDown = (event) => {
+      start = { x: event.clientX, y: event.clientY };
+    };
+    const onMove = (event) => {
+      if (!start) return;
+      const dx = event.clientX - start.x;
+      const dy = event.clientY - start.y;
+      if (Math.abs(dy) < 38 || Math.abs(dy) < Math.abs(dx)) return;
+      if (dy > 0 && !ui.monthExpanded) {
+        start = null;
+        setMonthExpanded(true);
+      }
+    };
+    const onUp = () => {
+      start = null;
+    };
+    dateStripShell?.addEventListener("pointerdown", onDown, { passive: true });
+    dateStripShell?.addEventListener("pointermove", onMove, { passive: true });
+    dateStripShell?.addEventListener("pointerup", onUp, { passive: true });
+    dateStripShell?.addEventListener("pointercancel", onUp, { passive: true });
+
+    let monthStart = null;
+    monthView.addEventListener("pointerdown", (event) => {
+      monthStart = { x: event.clientX, y: event.clientY };
+    }, { passive: true });
+    monthView.addEventListener("pointermove", (event) => {
+      if (!monthStart) return;
+      const dx = event.clientX - monthStart.x;
+      const dy = event.clientY - monthStart.y;
+      if (dy < -38 && Math.abs(dy) > Math.abs(dx)) {
+        monthStart = null;
+        setMonthExpanded(false);
+      }
+    }, { passive: true });
+    monthView.addEventListener("pointerup", () => {
+      monthStart = null;
+    }, { passive: true });
   }
 
   function scrollSelectedDate(smooth = true) {
@@ -1139,6 +1581,14 @@
     );
   }
 
+  function taskRepeatLabel(task) {
+    if (!task?.repeat) return "";
+    if (task.repeat.type === "daily") return "每天";
+    if (task.repeat.type === "weekly") return "每周";
+    if (task.repeat.type === "monthly") return "每月";
+    return "";
+  }
+
   function taskMetaHTML(task) {
     const parts = [];
     if (task.listId) {
@@ -1146,6 +1596,9 @@
     }
     if (task.habitId) {
       parts.push(`<span class="tag tag--habit">每日</span>`);
+    }
+    if (task.repeat) {
+      parts.push(`<span class="tag tag--repeat">${taskRepeatLabel(task)}</span>`);
     }
     if (state.settings?.subtasksEnabled && task.subtasks?.length) {
       const done = task.subtasks.filter((item) => item.done).length;
@@ -1286,6 +1739,11 @@
               : `<button class="goal-action-item" type="button" id="taskActionEdit">${ICONS.pen}<span>编辑任务</span></button>
                  <button class="goal-action-item" type="button" id="taskActionPostpone">${ICONS.calendarNext}<span>顺延到明天</span></button>`
           }
+          ${
+            task.repeat
+              ? `<button class="goal-action-item" type="button" id="taskActionStopRepeat">${ICONS.close}<span>停止重复</span></button>`
+              : ""
+          }
           <button class="goal-action-item goal-action-item--danger" type="button" id="taskActionDelete">${ICONS.trash}<span>删除任务</span></button>
         </div>
         <button class="confirm-cancel" type="button" data-close-sheet style="margin-top:10px">取消</button>
@@ -1307,6 +1765,13 @@
       });
     document.querySelector("#taskActionDelete").addEventListener("click", () => {
       openDeleteTaskConfirm(taskId);
+    });
+    document.querySelector("#taskActionStopRepeat")?.addEventListener("click", () => {
+      task.repeat = null;
+      saveState();
+      closeSheet();
+      refreshTasksView({ animate: false });
+      showToast("已停止重复");
     });
   }
 
@@ -1403,9 +1868,47 @@
     renderTaskList(options);
     updateDateStripDots();
     updateDateStripSelection();
+    if (ui.monthExpanded) renderMonthView();
   }
 
   // ---------- Task completion ----------
+  function createNextRepeatTask(task) {
+    if (!task?.repeat || task.habitId || task.goalId) return null;
+    const seriesId = task.repeat.seriesId || uid("series");
+    task.repeat.seriesId = seriesId;
+    let nextDate = nextRepeatKey(task.date, task.repeat.type);
+    const today = todayKey();
+    while (nextDate < today) {
+      nextDate = nextRepeatKey(nextDate, task.repeat.type);
+    }
+    if (task.repeat.endDate && nextDate > task.repeat.endDate) return null;
+    const exists = state.tasks.some(
+      (item) =>
+        item.repeat?.seriesId === seriesId &&
+        item.date === nextDate &&
+        !item.done
+    );
+    if (exists) return null;
+
+    const next = {
+      ...task,
+      id: uid("task"),
+      date: nextDate,
+      done: false,
+      completedAt: null,
+      createdAt: Date.now(),
+      isSample: false,
+      repeat: { ...task.repeat, seriesId },
+      subtasks: (task.subtasks || []).map((item) => ({
+        ...item,
+        id: uid("subtask"),
+        done: false,
+      })),
+    };
+    state.tasks.push(next);
+    return next;
+  }
+
   function toggleTask(taskId, card) {
     const task = state.tasks.find((item) => item.id === taskId);
     if (!task) return;
@@ -1436,9 +1939,14 @@
       task.done = true;
       task.completedAt = Date.now();
       ui.completedOpen = false;
+      if (task.habitId) {
+        const habit = state.habits.find((item) => item.id === task.habitId);
+        if (habit) pruneHabitPeriodTasks(habit);
+      }
+      const next = createNextRepeatTask(task);
       saveState();
       refreshTasksView({ animate: false });
-      showToast("完成得漂亮");
+      showToast(next ? "完成，已生成下一次" : "完成得漂亮");
     }, 680);
   }
 
@@ -1680,7 +2188,7 @@
         <div class="sheet-grab"></div>
         <div class="confirm-icon">${ICONS.trash}</div>
         <h2>删除这个任务？</h2>
-        <p>「${esc(task.title)}」会被移除，这个操作不能撤销。</p>
+        <p>「${esc(task.title)}」会移入回收站，5 秒内可撤销，也可以稍后恢复。</p>
         <div class="confirm-actions">
           <button class="btn-danger" type="button" id="confirmDeleteTask">${ICONS.trash}<span>确认删除</span></button>
           <button class="confirm-cancel" type="button" data-close-sheet>先留着</button>
@@ -1697,12 +2205,21 @@
         ];
       }
       if (ui.expandedTaskId === taskId) ui.expandedTaskId = null;
+      const record = pushTrash({
+        type: "task",
+        title: task.title,
+        item: task,
+      });
       state.tasks = state.tasks.filter((item) => item.id !== taskId);
       saveState();
       closeSheet();
       refreshTasksView({ animate: false });
       renderGoalList();
-      showToast("任务已删除");
+      if (!listsPage.hidden) renderListManagerPage();
+      showToast("任务已移入回收站", {
+        undo: true,
+        onUndo: () => restoreTrashEntry(record.id),
+      });
     });
   }
 
@@ -1901,6 +2418,7 @@
       }
 
       const date = formDate || ui.selectedDate;
+      const repeatValue = existing?.repeat || null;
       const cleanSubtasks = state.settings.subtasksEnabled
         ? subtaskDrafts
             .map((item) => ({
@@ -1910,11 +2428,12 @@
             }))
             .filter((item) => item.title)
         : existing?.subtasks || [];
-      if (existing) {
+        if (existing) {
         existing.title = title;
         existing.note = noteInput.value.trim();
         existing.date = date;
         existing.listId = selectedListId;
+        existing.repeat = repeatValue;
         if (state.settings.subtasksEnabled) {
           existing.subtasks = cleanSubtasks;
         }
@@ -1928,11 +2447,13 @@
           done: false,
           createdAt: Date.now(),
           subtasks: cleanSubtasks,
+          repeat: repeatValue,
         });
       }
       saveState();
       closeSheet();
       selectDate(date, { force: true });
+      if (!listsPage.hidden) renderListManagerPage();
       showToast(existing ? "任务已更新" : "任务已添加");
     };
 
@@ -2185,7 +2706,7 @@
 
     return `<article class="goal-card ${
       progress.percent === 100 && progress.tasks.length ? "is-complete" : ""
-    }" data-goal-id="${goal.id}">
+    } ${goal.paused ? "is-paused" : ""}" data-goal-id="${goal.id}">
       <div class="goal-top">
         <button class="goal-icon goal-color-trigger" type="button" data-action="goal-color" data-goal-color="${goal.id}" aria-label="选择目标颜色" style="${goalColorStyle(goal.color || 0)}">${
           GOAL_ICONS[goal.unit] || ICONS.flag
@@ -2201,6 +2722,11 @@
             ${
               progress.percent === 100 && progress.tasks.length
                 ? `<span class="meta-dot"></span><span style="color:var(--success);font-weight:700">已完成</span>`
+                : ""
+            }
+            ${
+              goal.paused
+                ? `<span class="meta-dot"></span><span class="goal-paused-badge">已暂停</span>`
                 : ""
             }
           </div>
@@ -2341,14 +2867,17 @@
   function renderHabitList() {
     if (!habitList) return;
     ensureHabitTasks(todayKey());
-    if (!state.habits.length) {
+    const visibleHabits = state.habits.filter((habit) =>
+      habitMatchesDate(habit, todayKey())
+    );
+    if (!visibleHabits.length) {
       habitList.innerHTML = `<div class="habit-empty">
         <span class="habit-empty-icon">${ICONS.sun}</span>
-        <span><strong>还没有每日习惯</strong><small>从一件每天都能做到的小事开始</small></span>
+        <span><strong>今天没有需要重复的习惯</strong><small>重复的时候会重新出现在这里</small></span>
       </div>`;
       return;
     }
-    habitList.innerHTML = state.habits
+    habitList.innerHTML = visibleHabits
       .map((habit) => {
         const todayTask = habitTaskFor(habit.id);
         const scheduledToday = habitMatchesDate(habit, todayKey());
@@ -2357,18 +2886,31 @@
         const list = getList(habit.listId);
         const habitColor = listColorOption(habit.color || stableHabitColor(habit.id));
         const repeatLabel = habitRepeatLabel(habit);
+        const countMode =
+          ["weekly", "monthly"].includes(habitRepeat(habit).type) &&
+          habitRepeat(habit).mode === "count";
+        const target = habitTarget(habit);
+        const periodDone = countMode
+          ? habitPeriodDone(habit.id, todayKey(), habitRepeat(habit).type)
+          : 0;
+        const periodLabel = habitRepeat(habit).type === "monthly" ? "本月" : "本周";
+        const weeklyReached = countMode && periodDone >= target;
         return `<article class="habit-card ${done ? "is-done" : ""}" data-habit-id="${habit.id}">
           <button class="habit-state habit-color-trigger ${done ? "is-done" : ""}" type="button" data-habit-color="${habit.id}" aria-label="选择习惯颜色" style="color:${habitColor.color};background:${habitColor.bg}">${
           done ? ICONS.check : ICONS.sun
         }</button>
           <div class="habit-copy">
             <strong>${esc(habit.title)}</strong>
-            <small>${esc(list.name)} · ${repeatLabel} · ${
+            <small>${esc(list.name)} · ${repeatLabel}${
+          countMode ? ` · ${periodLabel} ${periodDone}/${target}` : ""
+        } · ${
           !scheduledToday
             ? "今天不重复"
-            : done
-              ? "今天已完成"
-              : "今天待完成"
+            : weeklyReached
+              ? `${periodLabel}已完成`
+              : done
+                ? "今天已完成"
+                : "今天待完成"
         }${
           habitRepeat(habit).type === "daily" && streak > 0
             ? ` · 连续 ${streak} 天`
@@ -2394,6 +2936,19 @@
         existing?.repeat?.weekdays?.length
           ? [...existing.repeat.weekdays]
           : [today.getDay()],
+      monthDays:
+        existing?.repeat?.monthDays?.length
+          ? [...existing.repeat.monthDays]
+          : [today.getDate()],
+      mode: existing?.repeat?.mode === "count" ? "count" : "days",
+      weeklyTarget: Math.max(
+        1,
+        Math.min(7, Number(existing?.repeat?.weeklyTarget) || 3)
+      ),
+      monthlyTarget: Math.max(
+        1,
+        Math.min(31, Number(existing?.repeat?.monthlyTarget) || 8)
+      ),
       endDate: existing?.repeat?.endDate || "",
     };
     openSheet(
@@ -2432,6 +2987,7 @@
             <div class="segmented habit-repeat-segment" id="habitRepeatType">
               <button type="button" data-repeat-type="daily" class="${repeat.type === "daily" ? "is-active" : ""}">每天</button>
               <button type="button" data-repeat-type="weekly" class="${repeat.type === "weekly" ? "is-active" : ""}">每周</button>
+              <button type="button" data-repeat-type="monthly" class="${repeat.type === "monthly" ? "is-active" : ""}">每月</button>
             </div>
             <div class="habit-weekday-picker" id="habitWeekdayPicker">
               ${["日", "一", "二", "三", "四", "五", "六"]
@@ -2440,6 +2996,16 @@
                     `<button class="habit-weekday ${repeat.weekdays.includes(day) ? "is-selected" : ""}" type="button" data-weekday="${day}">${label}</button>`
                 )
                 .join("")}
+            </div>
+            <button class="habit-month-trigger" type="button" id="habitMonthTrigger" hidden>
+              ${ICONS.calendar}<span id="habitMonthTriggerLabel">选择每月日期</span>${ICONS.chevron}
+            </button>
+            <div class="habit-count-row" id="habitCountRow" hidden>
+              <button class="habit-count-toggle" type="button" id="habitCountMode" aria-pressed="${repeat.mode === "count"}">
+                <span class="habit-count-check">${repeat.mode === "count" ? ICONS.check : ""}</span>
+                <span id="habitCountModeLabel">按每周次数</span>
+              </button>
+              <div class="habit-target-chips" id="habitTargetChips"></div>
             </div>
             <button class="habit-end-date" type="button" id="habitEndDateBtn">${repeat.endDate ? `结束于 ${formatShortDate(repeat.endDate)}` : "不设结束日期"}</button>
             <button class="habit-end-clear" type="button" id="habitEndDateClear" ${repeat.endDate ? "" : "hidden"}>清除结束日期</button>
@@ -2454,15 +3020,51 @@
     const picker = document.querySelector("#habitListPicker");
     const repeatType = document.querySelector("#habitRepeatType");
     const weekdayPicker = document.querySelector("#habitWeekdayPicker");
+    const monthTrigger = document.querySelector("#habitMonthTrigger");
+    const monthTriggerLabel = document.querySelector("#habitMonthTriggerLabel");
+    const countRow = document.querySelector("#habitCountRow");
+    const countMode = document.querySelector("#habitCountMode");
+    const countModeLabel = document.querySelector("#habitCountModeLabel");
+    const targetChips = document.querySelector("#habitTargetChips");
+
+    const updateMonthTrigger = () => {
+      if (!monthTriggerLabel) return;
+      if (repeat.mode === "count") {
+        monthTriggerLabel.textContent = `每月 ${repeat.monthlyTarget} 次`;
+      } else {
+        const days = [...repeat.monthDays].sort((a, b) => a - b);
+        monthTriggerLabel.textContent = days.length
+          ? `每月 ${days.map((day) => `${day}日`).join("、")}`
+          : "选择每月日期";
+      }
+    };
+
+    const renderTargetChips = () => {
+      const target = repeat.weeklyTarget;
+      targetChips.innerHTML = Array.from({ length: 7 }, (_, index) => {
+        const value = index + 1;
+        return `<button class="${value === target ? "is-selected" : ""}" type="button" data-habit-target="${value}">${value}</button>`;
+      }).join("");
+      targetChips.hidden = repeat.mode !== "count";
+    };
 
     const syncRepeatControls = () => {
-      weekdayPicker.hidden = repeat.type !== "weekly";
+      const weekly = repeat.type === "weekly";
+      const monthly = repeat.type === "monthly";
+      weekdayPicker.hidden = !weekly || repeat.mode === "count";
+      monthTrigger.hidden = !monthly;
+      countRow.hidden = !weekly;
+      countMode.classList.toggle("is-on", repeat.mode === "count");
+      countMode.setAttribute("aria-pressed", String(repeat.mode === "count"));
+      countModeLabel.textContent = "按每周次数";
       repeatType.querySelectorAll("[data-repeat-type]").forEach((button) => {
         button.classList.toggle(
           "is-active",
           button.dataset.repeatType === repeat.type
         );
       });
+      renderTargetChips();
+      updateMonthTrigger();
     };
     syncRepeatControls();
 
@@ -2472,12 +3074,34 @@
     weekdayPicker.addEventListener("pointerdown", (event) => {
       if (event.target.closest("button")) event.preventDefault();
     });
+    countRow.addEventListener("pointerdown", (event) => {
+      if (event.target.closest("button")) event.preventDefault();
+    });
 
     repeatType.addEventListener("click", (event) => {
       const button = event.target.closest("[data-repeat-type]");
       if (!button) return;
       repeat.type = button.dataset.repeatType;
       syncRepeatControls();
+      nameInput.focus({ preventScroll: true });
+    });
+    monthTrigger.addEventListener("click", () => {
+      nameInput.blur();
+      openHabitMonthlyPicker(
+        {
+          monthDays: repeat.monthDays,
+          mode: repeat.mode,
+          monthlyTarget: repeat.monthlyTarget,
+        },
+        (value) => {
+          repeat.monthDays = value.monthDays;
+          repeat.mode = value.mode;
+          repeat.monthlyTarget = value.monthlyTarget;
+          syncRepeatControls();
+          nameInput.blur();
+        },
+        monthTrigger
+      );
     });
     weekdayPicker.addEventListener("click", (event) => {
       const button = event.target.closest("[data-weekday]");
@@ -2490,6 +3114,20 @@
         repeat.weekdays = [...repeat.weekdays, day];
       }
       button.classList.toggle("is-selected");
+      nameInput.focus({ preventScroll: true });
+    });
+    countMode.addEventListener("click", () => {
+      repeat.mode = repeat.mode === "count" ? "days" : "count";
+      syncRepeatControls();
+      nameInput.focus({ preventScroll: true });
+    });
+    targetChips.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-habit-target]");
+      if (!button) return;
+      const value = Number(button.dataset.habitTarget);
+      repeat.weeklyTarget = value;
+      renderTargetChips();
+      nameInput.focus({ preventScroll: true });
     });
     document
       .querySelector("#habitEndDateBtn")
@@ -2543,6 +3181,10 @@
       const repeatValue = {
         type: repeat.type,
         weekdays: [...repeat.weekdays],
+        monthDays: [...repeat.monthDays],
+        mode: repeat.mode,
+        weeklyTarget: repeat.weeklyTarget,
+        monthlyTarget: repeat.monthlyTarget,
         endDate: repeat.endDate,
       };
       if (existing) {
@@ -2567,6 +3209,8 @@
       }
       saveState();
       ensureHabitTasks(todayKey());
+      const savedHabit = existing || state.habits[state.habits.length - 1];
+      if (savedHabit) pruneHabitPeriodTasks(savedHabit);
       closeSheet();
       renderGoalList();
       refreshTasksView({ animate: false });
@@ -2695,7 +3339,7 @@
         <div class="sheet-grab"></div>
         <div class="confirm-icon">${ICONS.trash}</div>
         <h2>删除这个习惯？</h2>
-        <p>「${esc(habit.title)}」以及它生成的每日任务都会被移除，这个操作不能撤销。</p>
+        <p>「${esc(habit.title)}」以及它生成的每日任务会移入回收站，5 秒内可撤销。</p>
         <div class="confirm-actions">
           <button class="btn-danger" type="button" id="confirmDeleteHabit">${ICONS.trash}<span>确认删除</span></button>
           <button class="confirm-cancel" type="button" data-close-sheet>先留着</button>
@@ -2704,6 +3348,17 @@
       { className: "sheet--action", label: "确认删除习惯" }
     );
     document.querySelector("#confirmDeleteHabit").addEventListener("click", () => {
+      const relatedTasks = state.tasks.filter((task) => task.habitId === habitId);
+      const relatedSkips = (state.habitSkips || []).filter((key) =>
+        key.startsWith(`${habitId}:`)
+      );
+      const record = pushTrash({
+        type: "habit",
+        title: habit.title,
+        item: habit,
+        tasks: relatedTasks,
+        habitSkips: relatedSkips,
+      });
       state.habits = state.habits.filter((item) => item.id !== habitId);
       state.tasks = state.tasks.filter((task) => task.habitId !== habitId);
       state.habitSkips = (state.habitSkips || []).filter(
@@ -2713,17 +3368,22 @@
       closeSheet();
       renderGoalList();
       refreshTasksView({ animate: false });
-      showToast("习惯已删除");
+      showToast("习惯已移入回收站", {
+        undo: true,
+        onUndo: () => restoreTrashEntry(record.id),
+      });
     });
   }
 
   function renderGoalList() {
-    if (!state.goals.length) {
+    const activeGoals = state.goals.filter((goal) => !goal.paused);
+    if (!activeGoals.length) {
       goalList.innerHTML = createEmptyHTML();
     } else {
-      goalList.innerHTML = state.goals.map((goal) => goalCardHTML(goal)).join("");
+      goalList.innerHTML = activeGoals.map((goal) => goalCardHTML(goal)).join("");
     }
     renderHabitList();
+    renderProfileMenuHints();
   }
 
   function toggleGoalPlan(goalId, forceOpen = null) {
@@ -2754,6 +3414,8 @@
         </div>
         <div class="goal-action-list">
           <button class="goal-action-item" type="button" id="editGoalAction">${ICONS.pen}<span>编辑目标</span></button>
+          <button class="goal-action-item" type="button" id="goalPauseAction">${ICONS.clock}<span>${goal.paused ? "继续目标" : "暂停目标"}</span></button>
+          <button class="goal-action-item" type="button" id="goalCatchUpAction">${ICONS.calendarNext}<span>追赶未完成行动</span></button>
           <button class="goal-action-item goal-action-item--danger" type="button" id="deleteGoalAction">${ICONS.trash}<span>删除目标及关联任务</span></button>
         </div>
         <button class="confirm-cancel" type="button" data-close-sheet style="margin-top:10px">取消</button>
@@ -2764,6 +3426,38 @@
     document.querySelector("#editGoalAction").addEventListener("click", () => {
       closeSheet({ immediate: true });
       openGoalEditor(goalId);
+    });
+
+    document.querySelector("#goalPauseAction").addEventListener("click", () => {
+      goal.paused = !goal.paused;
+      saveState();
+      closeSheet();
+      renderProfileMenuHints();
+      renderGoalList();
+      showToast(goal.paused ? "目标已暂停" : "目标已继续");
+    });
+
+    document.querySelector("#goalCatchUpAction").addEventListener("click", () => {
+      const today = todayKey();
+      const missed = state.tasks
+        .filter(
+          (task) => task.goalId === goalId && !task.done && task.date < today
+        )
+        .sort((a, b) => a.date.localeCompare(b.date));
+      if (!missed.length) {
+        closeSheet();
+        showToast("没有需要追赶的行动");
+        return;
+      }
+      missed.forEach((task, index) => {
+        task.date = addDaysKey(today, Math.min(index, 30));
+      });
+      goal.paused = false;
+      saveState();
+      closeSheet();
+      renderGoalList();
+      refreshTasksView({ animate: false });
+      showToast(`已追赶 ${missed.length} 个行动`);
     });
 
     document.querySelector("#deleteGoalAction").addEventListener("click", () => {
@@ -3020,7 +3714,7 @@
         <div class="sheet-grab"></div>
         <div class="confirm-icon">${ICONS.trash}</div>
         <h2>删除这个目标？</h2>
-        <p>「${esc(goal.title)}」以及它同步到任务清单的 ${taskCount} 个行动都会被移除，这个操作不能撤销。</p>
+        <p>「${esc(goal.title)}」以及它同步到任务清单的 ${taskCount} 个行动会移入回收站，5 秒内可撤销。</p>
         <div class="confirm-actions">
           <button class="btn-danger" type="button" id="confirmDeleteGoal">${ICONS.trash}<span>确认删除</span></button>
           <button class="confirm-cancel" type="button" data-close-sheet>先留着</button>
@@ -3030,13 +3724,23 @@
     );
 
     document.querySelector("#confirmDeleteGoal").addEventListener("click", () => {
+      const relatedTasks = state.tasks.filter((task) => task.goalId === goalId);
+      const record = pushTrash({
+        type: "goal",
+        title: goal.title,
+        item: goal,
+        tasks: relatedTasks,
+      });
       state.goals = state.goals.filter((item) => item.id !== goalId);
       state.tasks = state.tasks.filter((task) => task.goalId !== goalId);
       saveState();
       closeSheet();
       renderGoalList();
       refreshTasksView({ animate: false });
-      showToast("目标已删除");
+      showToast("目标已移入回收站", {
+        undo: true,
+        onUndo: () => restoreTrashEntry(record.id),
+      });
     });
   }
 
@@ -3956,7 +4660,100 @@
 
   function renderListManagerPage() {
     if (!listManagerContent) return;
-    listManagerContent.innerHTML = state.lists
+    const query = (ui.listQuery || "").trim().toLowerCase();
+    const addListButton = document.querySelector("#addListPageBtn");
+    if (addListButton) addListButton.hidden = Boolean(query);
+    if (query) {
+      const tasks = state.tasks
+        .filter(
+          (task) =>
+            task.title.toLowerCase().includes(query) ||
+            (task.note || "").toLowerCase().includes(query)
+        )
+        .sort(
+          (a, b) =>
+            a.date.localeCompare(b.date) ||
+            Number(a.done) - Number(b.done) ||
+            (a.createdAt || 0) - (b.createdAt || 0)
+        );
+      if (!tasks.length) {
+        listManagerContent.innerHTML = `<div class="list-search-empty">没有匹配的待办任务</div>`;
+        return;
+      }
+      const allSelected =
+        tasks.length > 0 && tasks.every((task) => ui.searchSelected.has(task.id));
+      listManagerContent.innerHTML = `<div class="list-search-toolbar">
+        <button type="button" id="listSearchSelectAll">${allSelected ? "取消全选" : "全选"}</button>
+        <button type="button" id="listSearchDeleteSelected" ${ui.searchSelected.size ? "" : "disabled"}>删除所选${ui.searchSelected.size ? ` (${ui.searchSelected.size})` : ""}</button>
+      </div>` + tasks
+        .map((task) => {
+          const list = getList(task.listId);
+          const color = listColorOption(list.color);
+          const selected = ui.searchSelected.has(task.id);
+          return `<div class="list-manage-row list-task-result ${task.done ? "is-done" : ""} ${selected ? "is-selected" : ""}">
+            <button class="search-select-box ${selected ? "is-selected" : ""}" type="button" data-search-select="${task.id}" aria-label="${selected ? "取消选择" : "选择"}任务 ${esc(task.title)}" aria-pressed="${selected}">${selected ? ICONS.check : ""}</button>
+            <button class="list-manage-main" type="button" data-list-task-open="${task.id}">
+              <span class="list-manage-dot" style="background:${color.color}"></span>
+              <span class="list-manage-copy">
+                <strong>${esc(task.title)}</strong>
+                <small>${esc(list.name)} · ${formatShortDate(task.date)}${
+                  task.done ? " · 已完成" : ""
+                }</small>
+              </span>
+            </button>
+            ${
+              task.done
+                ? ""
+                : `<button class="list-manage-edit-button" type="button" data-list-task-edit="${task.id}" aria-label="编辑任务 ${esc(task.title)}">${ICONS.pen}</button>`
+            }
+            <button class="list-manage-delete" type="button" data-list-task-delete="${task.id}" aria-label="删除任务 ${esc(task.title)}">${ICONS.trash}</button>
+          </div>`;
+        })
+        .join("");
+      listManagerContent.querySelector("#listSearchSelectAll")?.addEventListener("click", () => {
+        if (allSelected) {
+          tasks.forEach((task) => ui.searchSelected.delete(task.id));
+        } else {
+          tasks.forEach((task) => ui.searchSelected.add(task.id));
+        }
+        renderListManagerPage();
+      });
+      listManagerContent.querySelector("#listSearchDeleteSelected")?.addEventListener("click", () => {
+        openDeleteSearchTasksConfirm();
+      });
+      listManagerContent.querySelectorAll("[data-search-select]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const taskId = button.dataset.searchSelect;
+          if (ui.searchSelected.has(taskId)) ui.searchSelected.delete(taskId);
+          else ui.searchSelected.add(taskId);
+          renderListManagerPage();
+        });
+      });
+      listManagerContent.querySelectorAll("[data-list-task-open]").forEach((button) => {
+        button.addEventListener("click", () => {
+          openSearchResult("task", button.dataset.listTaskOpen);
+        });
+      });
+      listManagerContent.querySelectorAll("[data-list-task-edit]").forEach((button) => {
+        button.addEventListener("click", () => {
+          openTaskForm(button.dataset.listTaskEdit);
+        });
+      });
+      listManagerContent.querySelectorAll("[data-list-task-delete]").forEach((button) => {
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          ui.searchSelected.delete(button.dataset.listTaskDelete);
+          openDeleteTaskConfirm(button.dataset.listTaskDelete);
+        });
+      });
+      return;
+    }
+    const lists = state.lists;
+    if (!lists.length) {
+      listManagerContent.innerHTML = `<div class="list-search-empty">没有匹配的清单</div>`;
+      return;
+    }
+    listManagerContent.innerHTML = lists
       .map((list) => {
         const color = listColorOption(list.color);
         const usage = getListUsage(list.id);
@@ -4006,9 +4803,19 @@
   }
 
   function openListManager() {
+    if (listsPage.hidden) resetListSearch();
     renderListManagerPage();
     if (!overlay.hidden) closeSheet();
     showSubPage("page-lists", "profile");
+  }
+
+  function resetListSearch() {
+    ui.listQuery = "";
+    ui.searchSelected.clear();
+    if (listSearchInput) listSearchInput.value = "";
+    if (clearListSearch) clearListSearch.hidden = true;
+    const addListButton = document.querySelector("#addListPageBtn");
+    if (addListButton) addListButton.hidden = false;
   }
 
   function renderListDetailPage() {
@@ -4067,7 +4874,7 @@
         <div class="sheet-grab"></div>
         <div class="confirm-icon">${ICONS.trash}</div>
         <h2>删除 ${ids.length} 个任务？</h2>
-        <p>这些任务会从当前清单和日期中一起删除，这个操作不能撤销。</p>
+        <p>这些任务会移入回收站，5 秒内可撤销。</p>
         <div class="confirm-actions">
           <button class="btn-danger" type="button" id="confirmDeleteListTasks">${ICONS.trash}<span>确认删除</span></button>
           <button class="confirm-cancel" type="button" data-close-sheet>取消</button>
@@ -4085,6 +4892,11 @@
           ];
         }
       });
+      const record = pushTrash({
+        type: "tasks",
+        title: `${removed.length} 个任务`,
+        tasks: removed,
+      });
       state.tasks = state.tasks.filter((task) => !ids.includes(task.id));
       ui.listSelected = new Set();
       if (ui.expandedTaskId && ids.includes(ui.expandedTaskId)) {
@@ -4095,7 +4907,56 @@
       renderListDetailPage();
       renderListManagerPage();
       refreshTasksView({ animate: false });
-      showToast(`已删除 ${ids.length} 个任务`);
+      showToast(`已将 ${ids.length} 个任务移入回收站`, {
+        undo: true,
+        onUndo: () => restoreTrashEntry(record.id),
+      });
+    });
+  }
+
+  function openDeleteSearchTasksConfirm() {
+    const ids = [...ui.searchSelected].filter((id) =>
+      state.tasks.some((task) => task.id === id)
+    );
+    if (!ids.length) return;
+    openSheet(
+      `<div class="confirm-sheet">
+        <div class="sheet-grab"></div>
+        <div class="confirm-icon">${ICONS.trash}</div>
+        <h2>删除所选 ${ids.length} 个任务？</h2>
+        <p>这些任务会移入回收站，5 秒内可撤销。</p>
+        <div class="confirm-actions">
+          <button class="btn-danger" type="button" id="confirmDeleteSearchTasks">${ICONS.trash}<span>确认删除</span></button>
+          <button class="confirm-cancel" type="button" data-close-sheet>取消</button>
+        </div>
+      </div>`,
+      { className: "sheet--action", label: "确认批量删除搜索结果" }
+    );
+    document.querySelector("#confirmDeleteSearchTasks").addEventListener("click", () => {
+      const removed = state.tasks.filter((task) => ids.includes(task.id));
+      removed.forEach((task) => {
+        if (task.habitId) {
+          state.habitSkips = [
+            ...(state.habitSkips || []),
+            habitSkipKey(task.habitId, task.date),
+          ];
+        }
+      });
+      const record = pushTrash({
+        type: "tasks",
+        title: `${removed.length} 个任务`,
+        tasks: removed,
+      });
+      state.tasks = state.tasks.filter((task) => !ids.includes(task.id));
+      ui.searchSelected.clear();
+      saveState();
+      closeSheet();
+      renderListManagerPage();
+      refreshTasksView({ animate: false });
+      showToast(`已将 ${ids.length} 个任务移入回收站`, {
+        undo: true,
+        onUndo: () => restoreTrashEntry(record.id),
+      });
     });
   }
 
@@ -4254,7 +5115,7 @@
           usage.tasks
         } 个任务、${usage.goals} 个目标${
           usage.habits ? `和 ${usage.habits} 个习惯` : ""
-        }会移动到「${esc(fallback.name)}」。这个操作不能撤销。</p>
+        }会移动到「${esc(fallback.name)}」。清单会进入回收站，5 秒内可撤销。</p>
         <div class="confirm-actions">
           <button class="btn-danger" type="button" id="confirmDeleteList">${ICONS.trash}<span>删除并移动</span></button>
           <button class="confirm-cancel" type="button" data-close-sheet>取消</button>
@@ -4273,16 +5134,97 @@
       state.habits.forEach((habit) => {
         if (habit.listId === list.id) habit.listId = fallback.id;
       });
+      const record = pushTrash({
+        type: "list",
+        title: list.name,
+        item: list,
+      });
       state.lists = state.lists.filter((item) => item.id !== list.id);
       saveState();
       refreshTasksView({ animate: false });
       renderGoalList();
       openListManager();
-      showToast("清单已删除，内容已移动");
+      showToast("清单已删除并移入回收站", {
+        undo: true,
+        onUndo: () => restoreTrashEntry(record.id),
+      });
     });
   }
 
+  function goalStatsRows() {
+    return state.goals.map((goal) => ({ goal, ...getGoalStats(goal) }));
+  }
+
+  function goalStatsRowsHTML(goalRows) {
+    if (!goalRows.length) {
+      return `<div class="stats-empty">还没有创建目标，去「创造」里添加一个吧。</div>`;
+    }
+    return goalRows
+      .map(({ goal, tasks, percent }) => {
+        const color = listColorOption(getList(goal.listId).color);
+        return `<div class="stats-goal-row">
+          <div class="stats-goal-head">
+            <span class="list-manage-dot" style="background:${color.color}"></span>
+            <span>${esc(goal.title)}</span>
+            <b>${percent}%</b>
+          </div>
+          <div class="stats-goal-track"><i style="width:${percent}%"></i></div>
+          <small>${tasks.filter((task) => task.done).length}/${tasks.length} 个行动 · ${formatRange(
+            goal.startDate,
+            goal.endDate
+          )}${goal.paused ? " · 已暂停" : ""}</small>
+        </div>`;
+      })
+      .join("");
+  }
+
+  function getHabitStats() {
+    ensureHabitTasks(todayKey());
+    const today = todayKey();
+    const todayTasks = state.tasks.filter(
+      (task) => task.habitId && task.date === today
+    );
+    const done = todayTasks.filter((task) => task.done).length;
+    const habits = state.habits
+      .filter((habit) => habitMatchesDate(habit, today))
+      .map((habit) => {
+      const task = habitTaskFor(habit.id, today);
+      const repeat = habitRepeat(habit);
+      const countMode =
+        ["weekly", "monthly"].includes(repeat.type) && repeat.mode === "count";
+      const periodDone = countMode
+        ? habitPeriodDone(habit.id, today, repeat.type)
+        : 0;
+      const target = habitTarget(habit);
+      const periodLabel = repeat.type === "monthly" ? "本月" : "本周";
+      let status = "今天待完成";
+      if (task?.done) status = "今天已完成";
+      else if (task) status = "今天待完成";
+      else if (countMode && periodDone >= target) status = `${periodLabel}已完成`;
+      else if (!habitMatchesDate(habit, today)) status = "今天不重复";
+      return {
+        habit,
+        task,
+        repeat,
+        countMode,
+        periodDone,
+        target,
+        periodLabel,
+        status,
+        streak: habitStreak(habit.id),
+        color: listColorOption(habit.color || stableHabitColor(habit.id)),
+      };
+    });
+    return {
+      total: todayTasks.length,
+      done,
+      percent: percentOf(done, todayTasks.length),
+      habits,
+    };
+  }
+
   function openStatsPage(returnTab = "profile") {
+    ensureHabitTasks(todayKey());
     const today = todayKey();
     const todayTasks = state.tasks.filter((task) => task.date === today);
     const todayDone = todayTasks.filter((task) => task.done).length;
@@ -4296,10 +5238,7 @@
     const weekDone = weekTasks.filter((task) => task.done).length;
     const weekPercent = percentOf(weekDone, weekTasks.length);
 
-    const goalRows = state.goals.map((goal) => {
-      const stats = getGoalStats(goal);
-      return { goal, ...stats };
-    });
+    const goalRows = goalStatsRows();
     const goalPercent = goalRows.length
       ? Math.round(
           goalRows.reduce((total, item) => total + item.percent, 0) /
@@ -4309,6 +5248,7 @@
     const completedGoals = goalRows.filter(
       (item) => item.tasks.length > 0 && item.percent === 100
     ).length;
+    const habitStats = getHabitStats();
 
     const days = [];
     for (let offset = 6; offset >= 0; offset -= 1) {
@@ -4323,25 +5263,6 @@
         percent: percentOf(done, tasks.length),
       });
     }
-
-    const goalList = goalRows.length
-      ? goalRows
-          .map(({ goal, tasks, percent }) => {
-            const color = listColorOption(getList(goal.listId).color);
-            return `<div class="stats-goal-row">
-              <div class="stats-goal-head">
-                <span class="list-manage-dot" style="background:${color.color}"></span>
-                <span>${esc(goal.title)}</span>
-                <b>${percent}%</b>
-              </div>
-              <div class="stats-goal-track"><i style="width:${percent}%"></i></div>
-              <small>${tasks.filter((task) => task.done).length}/${
-              tasks.length
-            } 个行动</small>
-            </div>`;
-          })
-          .join("")
-      : `<div class="stats-empty">还没有创建目标，去「创造」里添加一个吧。</div>`;
 
     statsPage.innerHTML = `<div class="wizard">
         ${wizardHeader("统计", "INSIGHTS", 100, false)}
@@ -4362,20 +5283,27 @@
           </div>
 
           <div class="stats-cards">
-            <div class="stats-card">
+            <button class="stats-card" type="button" data-stats-detail="week">
               <span>本周完成度</span>
               <strong>${weekPercent}%</strong>
               <p>${weekDone}/${weekTasks.length} 个任务</p>
               <div class="stats-card-track"><i style="width:${weekPercent}%"></i></div>
               <small>${formatShortDate(weekStart)} – ${formatShortDate(weekEnd)}</small>
-            </div>
-            <div class="stats-card">
+            </button>
+            <button class="stats-card" type="button" data-stats-detail="goals">
               <span>目标完成度</span>
               <strong>${goalPercent}%</strong>
               <p>${completedGoals}/${goalRows.length} 个目标完成</p>
               <div class="stats-card-track"><i style="width:${goalPercent}%"></i></div>
               <small>所有进行中的目标</small>
-            </div>
+            </button>
+            <button class="stats-card stats-card--habit" type="button" data-stats-detail="habits">
+              <span>习惯完成度</span>
+              <strong>${habitStats.percent}%</strong>
+              <p>${habitStats.done}/${habitStats.total} 个今日习惯任务完成</p>
+              <div class="stats-card-track"><i style="width:${habitStats.percent}%"></i></div>
+              <small>${habitStats.habits.length} 个习惯</small>
+            </button>
           </div>
 
           <div class="stats-section-head"><span>最近 7 天</span><small>完成度</small></div>
@@ -4394,15 +5322,113 @@
               )
               .join("")}
           </div>
-
-          <div class="stats-section-head"><span>目标进度</span><small>${
-            goalRows.length
-          } 个目标</small></div>
-          <div class="stats-goal-list">${goalList}</div>
         </div>
       </div>`;
+
     statsPage.dataset.returnTab = returnTab;
+    statsPage.querySelectorAll("[data-stats-detail]").forEach((button) => {
+      button.addEventListener("click", () => {
+        openStatsDetail(button.dataset.statsDetail);
+      });
+    });
     openFullPage("page-stats", returnTab);
+  }
+
+  function openStatsDetail(type) {
+    ensureHabitTasks(todayKey());
+    const today = todayKey();
+    statsDetailPage.dataset.returnTab = "stats";
+    let title = "统计详情";
+    let eyebrow = "DETAIL";
+    let body = "";
+
+    if (type === "week") {
+      title = "本周完成度";
+      eyebrow = "THIS WEEK";
+      const weekStart = startOfWeekKey(today);
+      const weekEnd = addDaysKey(weekStart, 6);
+      const weekTasks = state.tasks.filter(
+        (task) => task.date >= weekStart && task.date <= weekEnd
+      );
+      const weekDone = weekTasks.filter((task) => task.done).length;
+      const weekPercent = percentOf(weekDone, weekTasks.length);
+      const rows = [];
+      for (let offset = 0; offset < 7; offset += 1) {
+        const key = addDaysKey(weekStart, offset);
+        const tasks = state.tasks.filter((task) => task.date === key);
+        const done = tasks.filter((task) => task.done).length;
+        const percent = percentOf(done, tasks.length);
+        rows.push(
+          `<div class="stats-detail-row">
+            <div class="stats-detail-row-head"><b>${formatShortDate(key)}</b><span>${done}/${tasks.length}</span></div>
+            <div class="stats-detail-track"><i style="width:${percent}%"></i></div>
+          </div>`
+        );
+      }
+      body = `<div class="stats-detail-summary">
+          <strong>${weekPercent}%</strong>
+          <span>${weekDone}/${weekTasks.length} 个任务完成</span>
+          <small>${formatShortDate(weekStart)} – ${formatShortDate(weekEnd)}</small>
+        </div>
+        <div class="stats-detail-list">${rows.join("")}</div>`;
+    } else if (type === "goals") {
+      title = "目标完成度";
+      eyebrow = "GOALS";
+      const goalRows = goalStatsRows();
+      const goalPercent = goalRows.length
+        ? Math.round(
+            goalRows.reduce((total, item) => total + item.percent, 0) /
+              goalRows.length
+          )
+        : 0;
+      const completed = goalRows.filter(
+        (item) => item.tasks.length > 0 && item.percent === 100
+      ).length;
+      body = `<div class="stats-detail-summary">
+          <strong>${goalPercent}%</strong>
+          <span>${completed}/${goalRows.length} 个目标完成</span>
+          <small>所有目标</small>
+        </div>
+        <div class="stats-goal-list">${goalStatsRowsHTML(goalRows)}</div>`;
+    } else {
+      title = "每日习惯完成度";
+      eyebrow = "HABITS";
+      const habitStats = getHabitStats();
+      body = `<div class="stats-detail-summary">
+          <strong>${habitStats.percent}%</strong>
+          <span>${habitStats.done}/${habitStats.total} 个今日习惯任务完成</span>
+          <small>${habitStats.habits.length} 个习惯</small>
+        </div>
+        ${
+          habitStats.habits.length
+            ? `<div class="stats-habit-list">${habitStats.habits
+                .map(
+                  (item) => `<div class="stats-habit-row">
+                    <span class="habit-state" style="color:${item.color.color};background:${item.color.bg}">${
+                      item.task?.done ? ICONS.check : ICONS.sun
+                    }</span>
+                    <div class="stats-habit-copy">
+                      <strong>${esc(item.habit.title)}</strong>
+                      <small>${habitRepeatLabel(item.habit)} · ${item.status}${
+                        item.streak > 0 ? ` · 连续 ${item.streak} 天` : ""
+                      }${item.countMode ? ` · ${item.periodLabel} ${item.periodDone}/${item.target}` : ""}</small>
+                    </div>
+                  </div>`
+                )
+                .join("")}</div>`
+            : `<div class="stats-empty">${
+                state.habits.length
+                  ? "今天没有需要重复的习惯"
+                  : "还没有每日习惯，去创造页添加一个吧。"
+              }</div>`
+        }`;
+    }
+
+    statsDetailPage.innerHTML = `<div class="wizard">
+      ${wizardHeader(title, eyebrow, 100, false)}
+      <div class="wizard-scroll stats-detail-content">${body}</div>
+    </div>`;
+    openFullPage("page-stats-detail", "profile");
   }
 
   async function exportData() {
@@ -4416,6 +5442,7 @@
       habits: state.habits,
       habitSkips: state.habitSkips,
       settings: state.settings,
+      trash: state.trash,
     };
     const json = JSON.stringify(payload, null, 2);
     const fileName = `qinglist-backup-${todayKey()}.json`;
@@ -4580,6 +5607,16 @@
               <span class="data-action-copy"><strong>导入备份</strong><small>用 JSON 文件恢复数据</small></span>
               ${ICONS.chevron}
             </button>
+            <button class="data-action" type="button" id="dataArchiveBtn">
+              <span class="data-action-icon data-action-icon--archive">${ICONS.archive || ICONS.flag}</span>
+              <span class="data-action-copy"><strong>已归档</strong><small>${state.goals.filter((goal) => goal.paused).length} 个暂停目标</small></span>
+              ${ICONS.chevron}
+            </button>
+            <button class="data-action" type="button" id="dataTrashBtn">
+              <span class="data-action-icon data-action-icon--trash">${ICONS.trash}</span>
+              <span class="data-action-copy"><strong>回收站</strong><small>${(state.trash || []).length} 项删除记录</small></span>
+              ${ICONS.chevron}
+            </button>
             <input type="file" id="importDataInput" accept=".json,application/json" hidden>
           </div>
           <div class="data-sample-card">
@@ -4608,7 +5645,279 @@
     document
       .querySelector("#clearSamplesBtn")
       .addEventListener("click", openClearSamplesConfirm);
+    document.querySelector("#dataArchiveBtn").addEventListener("click", openArchivePage);
+    document.querySelector("#dataTrashBtn").addEventListener("click", openTrashPage);
     openFullPage("page-data", "profile");
+  }
+
+  function renderProfileMenuHints() {
+    const archived = state.goals.filter((goal) => goal.paused).length;
+    const trash = (state.trash || []).length;
+    const archiveHint = document.querySelector("#archiveMenuHint");
+    const trashHint = document.querySelector("#trashMenuHint");
+    if (archiveHint) {
+      archiveHint.textContent = archived
+        ? `${archived} 个暂停的目标`
+        : "暂停的目标会放在这里";
+    }
+    if (trashHint) {
+      trashHint.textContent = trash ? `${trash} 项删除记录` : "删除的项目会保留在这里";
+    }
+  }
+
+  function openArchivePage() {
+    const goals = state.goals.filter((goal) => goal.paused);
+    archivePage.innerHTML = `<div class="wizard">
+        ${wizardHeader("已归档", "ARCHIVE", 100, false)}
+        <div class="wizard-scroll">
+          <p class="archive-intro">暂停的目标会离开「创造」页，放在这里保留进度和拆解。</p>
+          ${
+            goals.length
+              ? `<div class="archive-list">${goals
+                  .map(
+                    (goal) => `<div class="archive-row" data-archived-goal="${goal.id}">
+                      <span class="archive-icon" style="${goalColorStyle(goal.color || 0)}">${
+                        GOAL_ICONS[goal.unit] || ICONS.flag
+                      }</span>
+                      <div class="archive-copy">
+                        <strong>${esc(goal.title)}</strong>
+                        <span>${formatRange(goal.startDate, goal.endDate)} · 已暂停</span>
+                      </div>
+                      <button type="button" data-archive-restore="${goal.id}">继续</button>
+                    </div>`
+                  )
+                  .join("")}</div>`
+              : `<div class="archive-empty">${ICONS.archive || ICONS.flag}<strong>没有已归档目标</strong><span>暂停的目标会出现在这里。</span></div>`
+          }
+        </div>
+      </div>`;
+    archivePage.querySelectorAll("[data-archive-restore]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const goal = state.goals.find((item) => item.id === button.dataset.archiveRestore);
+        if (!goal) return;
+        goal.paused = false;
+        saveState();
+        renderGoalList();
+        renderProfileMenuHints();
+        openArchivePage();
+        showToast("目标已恢复");
+      });
+    });
+    archivePage.dataset.returnTab = "data";
+    openFullPage("page-archive", "data");
+  }
+
+  function trashTypeLabel(type) {
+    return (
+      {
+        task: "任务",
+        tasks: "批量任务",
+        goal: "目标",
+        habit: "习惯",
+        list: "清单",
+      }[type] || "项目"
+    );
+  }
+
+  function openTrashPage() {
+    const trash = state.trash || [];
+    trashPage.innerHTML = `<div class="wizard">
+        ${wizardHeader("回收站", "TRASH", 100, false)}
+        <div class="wizard-scroll">
+          <p class="archive-intro">删除的任务、目标、习惯和清单会保留在这里，可以随时恢复。</p>
+          ${
+            trash.length
+              ? `<div class="trash-card">
+                  <div class="trash-head">
+                    <div><strong>${trash.length} 项删除记录</strong><span>永久删除后无法恢复</span></div>
+                    <button type="button" id="clearTrashBtn">清空</button>
+                  </div>
+                  <div class="trash-list">
+                    ${trash
+                      .map(
+                        (entry) => `<div class="trash-row">
+                          <div class="trash-row-copy">
+                            <strong>${esc(entry.title || entry.item?.name || "未命名")}</strong>
+                            <span>${trashTypeLabel(entry.type)} · ${formatShortDate(
+                              keyOf(new Date(entry.deletedAt || Date.now()))
+                            )}</span>
+                          </div>
+                          <button type="button" data-trash-restore="${entry.id}">恢复</button>
+                          <button class="trash-purge" type="button" data-trash-purge="${entry.id}">永久删除</button>
+                        </div>`
+                      )
+                      .join("")}
+                  </div>
+                </div>`
+              : `<div class="archive-empty">${ICONS.trash}<strong>回收站是空的</strong><span>删除的项目会出现在这里。</span></div>`
+          }
+        </div>
+      </div>`;
+
+    document.querySelector("#clearTrashBtn")?.addEventListener("click", () => {
+      openSheet(
+        `<div class="confirm-sheet">
+          <div class="sheet-grab"></div>
+          <div class="confirm-icon">${ICONS.trash}</div>
+          <h2>清空回收站？</h2>
+          <p>回收站里的所有项目会被永久删除，无法恢复。</p>
+          <div class="confirm-actions">
+            <button class="btn-danger" type="button" id="confirmClearTrash">${ICONS.trash}<span>确认清空</span></button>
+            <button class="confirm-cancel" type="button" data-close-sheet>取消</button>
+          </div>
+        </div>`,
+        { className: "sheet--action", label: "清空回收站" }
+      );
+      document.querySelector("#confirmClearTrash").addEventListener("click", () => {
+        state.trash = [];
+        saveState();
+        closeSheet();
+        renderProfileMenuHints();
+        openTrashPage();
+        showToast("回收站已清空");
+      });
+    });
+    trashPage.querySelectorAll("[data-trash-restore]").forEach((button) => {
+      button.addEventListener("click", () => {
+        restoreTrashEntry(button.dataset.trashRestore);
+        openTrashPage();
+        renderProfileMenuHints();
+      });
+    });
+    trashPage.querySelectorAll("[data-trash-purge]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const record = (state.trash || []).find(
+          (entry) => entry.id === button.dataset.trashPurge
+        );
+        if (!record) return;
+        openSheet(
+          `<div class="confirm-sheet">
+            <div class="sheet-grab"></div>
+            <div class="confirm-icon">${ICONS.trash}</div>
+            <h2>永久删除？</h2>
+            <p>「${esc(record.title || "这个项目")}」将从回收站永久移除，无法恢复。</p>
+            <div class="confirm-actions">
+              <button class="btn-danger" type="button" id="confirmPurgeTrash">${ICONS.trash}<span>永久删除</span></button>
+              <button class="confirm-cancel" type="button" data-close-sheet>取消</button>
+            </div>
+          </div>`,
+          { className: "sheet--action", label: "永久删除" }
+        );
+        document.querySelector("#confirmPurgeTrash").addEventListener("click", () => {
+          purgeTrashEntry(record.id);
+          closeSheet();
+          renderProfileMenuHints();
+          openTrashPage();
+          showToast("已永久删除");
+        });
+      });
+    });
+    trashPage.dataset.returnTab = "data";
+    openFullPage("page-trash", "data");
+  }
+
+  function openGuidePage() {
+    guidePage.dataset.returnTab = "settings";
+    guidePage.innerHTML = `<div class="wizard">
+      ${wizardHeader("使用说明", "GUIDE", 100, false)}
+      <div class="wizard-scroll guide-content">
+        <p class="guide-lead">轻清单是一款离线优先的任务、目标和每日习惯管理工具。所有数据保存在本机，不需要登录。</p>
+
+        <section class="guide-section">
+          <h2>快速开始</h2>
+          <p>底部有三个主页面：</p>
+          <ul>
+            <li><b>任务</b>：按日期查看和完成待办</li>
+            <li><b>创造</b>：创建目标和每日习惯</li>
+            <li><b>我的</b>：统计、清单、数据和设置</li>
+          </ul>
+          <p>三个主页面可以直接左右滑动切换。</p>
+        </section>
+
+        <section class="guide-section">
+          <h2>任务</h2>
+          <ul>
+            <li>顶部日期条左右滑动选择日期，圆点表示当天有任务。</li>
+            <li>点击「添加任务」输入标题、备注、日期和清单。</li>
+            <li>点击任务卡可以原地展开详情和子任务。</li>
+            <li>子任务全部完成后，母任务会自动完成。</li>
+            <li>长按任务右侧三点可以拖动排序。</li>
+            <li>逾期任务会单独显示，可以单条或一键顺延到今天。</li>
+            <li>删除任务会进入回收站，并在底部提供 5 秒撤销。</li>
+          </ul>
+        </section>
+
+        <section class="guide-section">
+          <h2>目标</h2>
+          <ul>
+            <li>目标支持按天、周、月创建，可选择开始日期和周期。</li>
+            <li>系统会把目标拆成每日行动，并同步到任务清单。</li>
+            <li>点击目标卡片的日历图标可以修改目标颜色。</li>
+            <li>点击「查看拆解」查看每周或每天的行动。</li>
+            <li>目标菜单支持编辑、暂停、追赶未完成行动和删除。</li>
+            <li>暂停的目标会进入「数据 → 已归档」，不会占用创造页空间。</li>
+            <li>追赶会把逾期未完成的行动重新排期。</li>
+          </ul>
+        </section>
+
+        <section class="guide-section">
+          <h2>每日习惯</h2>
+          <ul>
+            <li>从创造页进入「每日习惯」。</li>
+            <li>习惯支持每天、每周和每月重复。</li>
+            <li>每周可以固定星期，也可以设置每周完成次数。</li>
+            <li>每月可以选择具体日期，也可以设置每月完成次数。</li>
+            <li>选择每月后，「选择每月日期」会打开月历弹窗。</li>
+            <li>月历弹窗中可以切换「按每月次数」并选择次数。</li>
+            <li>达到每周或每月次数后，后续未完成习惯任务会自动清理。</li>
+            <li>点击太阳图标可以修改习惯颜色。</li>
+          </ul>
+        </section>
+
+        <section class="guide-section">
+          <h2>清单与搜索</h2>
+          <ul>
+            <li>清单支持新建、改名、改色和删除。</li>
+            <li>清单页顶部搜索框搜索的是待办任务，不是清单名称。</li>
+            <li>搜索结果可以直接编辑或删除任务。</li>
+            <li>「我的」页面顶部还有全局搜索，可搜索任务、目标、习惯和清单。</li>
+          </ul>
+        </section>
+
+        <section class="guide-section">
+          <h2>数据、归档与回收站</h2>
+          <ul>
+            <li>数据页支持导出 JSON 备份和导入恢复。</li>
+            <li>导入会替换当前数据，建议先导出备份。</li>
+            <li>已归档页面保存暂停的目标。</li>
+            <li>回收站保存删除的任务、目标、习惯和清单，可恢复或永久删除。</li>
+            <li>清空回收站后无法恢复。</li>
+          </ul>
+        </section>
+
+        <section class="guide-section">
+          <h2>手势与外观</h2>
+          <ul>
+            <li>日期条可以左右拖动。</li>
+            <li>日期选择日历可以左右滑动切换月份。</li>
+            <li>任务三点长按拖动排序。</li>
+            <li>页面已禁用双指缩放，避免误触。</li>
+            <li>设置中可以调整字体大小、深色模式和子任务开关。</li>
+            <li>深色模式默认跟随系统，也可以手动切换。</li>
+          </ul>
+        </section>
+
+        <section class="guide-section">
+          <h2>注意事项</h2>
+          <ul>
+            <li>卸载应用或清除应用数据会丢失本地内容。</li>
+            <li>重要数据请定期导出 JSON 备份。</li>
+            <li>Android 覆盖安装不会清除应用数据。</li>
+          </ul>
+        </section>
+      </div>
+    </div>`;
+    openFullPage("page-guide", "profile");
   }
 
   function openSettingsPage() {
@@ -4648,8 +5957,12 @@
               <span class="settings-toggle-copy"><strong>子任务</strong><small>在任务里添加可勾选的步骤</small></span>
               <span class="settings-switch ${state.settings.subtasksEnabled ? "is-on" : ""}" aria-hidden="true"></span>
             </button>
+            <button class="settings-toggle-row" type="button" id="openGuideBtn">
+              <span class="settings-toggle-copy"><strong>使用说明</strong><small>查看任务、目标、习惯和数据的完整说明</small></span>
+              <span class="settings-toggle-chevron">${ICONS.chevron}</span>
+            </button>
           </div>
-          <div class="settings-about">轻清单 1.12.9</div>
+          <div class="settings-about">轻清单 1.13.9</div>
         </div>
       </div>`;
 
@@ -4693,6 +6006,10 @@
         saveState();
         openSettingsPage();
       });
+
+    document
+      .querySelector("#openGuideBtn")
+      .addEventListener("click", openGuidePage);
     openFullPage("page-settings", "profile");
   }
 
@@ -4744,14 +6061,141 @@
     }, 260);
   }
 
+  // ---------- Trash / undo ----------
+  function pushTrash(entry) {
+    const record = {
+      id: uid("trash"),
+      deletedAt: Date.now(),
+      ...entry,
+    };
+    state.trash = [record, ...(state.trash || [])].slice(0, 100);
+    saveState();
+    return record;
+  }
+
+  function removeTrashRecord(recordId) {
+    state.trash = (state.trash || []).filter((entry) => entry.id !== recordId);
+  }
+
+  function restoreTasksFromTrash(tasks) {
+    const restored = [];
+    (tasks || []).forEach((task) => {
+      const copy = { ...task };
+      if (state.tasks.some((item) => item.id === copy.id)) {
+        copy.id = uid("task");
+      }
+      state.tasks.push(copy);
+      restored.push(copy);
+    });
+    return restored;
+  }
+
+  function undoRestoredTrash(record) {
+    if (!record) return;
+    const taskIds = new Set();
+    if (record.type === "task" && record.item?.id) taskIds.add(record.item.id);
+    (record.tasks || []).forEach((task) => {
+      if (task.id) taskIds.add(task.id);
+    });
+    state.tasks = state.tasks.filter((task) => !taskIds.has(task.id));
+    if (record.type === "goal") {
+      state.goals = state.goals.filter((goal) => goal.id !== record.item.id);
+    }
+    if (record.type === "habit") {
+      state.habits = state.habits.filter((habit) => habit.id !== record.item.id);
+      state.habitSkips = (state.habitSkips || []).filter(
+        (key) => !key.startsWith(`${record.item.id}:`)
+      );
+    }
+    if (record.type === "list") {
+      state.lists = state.lists.filter((list) => list.id !== record.item.id);
+    }
+    state.trash = [record, ...(state.trash || [])].slice(0, 100);
+    saveState();
+    renderGoalList();
+    refreshTasksView({ animate: false });
+    if (!listsPage.hidden) renderListManagerPage();
+    if (!listDetailPage.hidden) renderListDetailPage();
+    if (!trashPage.hidden) openTrashPage();
+    showToast("已重新移入回收站");
+  }
+
+  function restoreTrashEntry(recordId, options = {}) {
+    const record = (state.trash || []).find((entry) => entry.id === recordId);
+    if (!record) return false;
+    if (record.type === "task") {
+      restoreTasksFromTrash([record.item]);
+    } else if (record.type === "tasks") {
+      restoreTasksFromTrash(record.tasks);
+    } else if (record.type === "goal") {
+      if (state.goals.some((goal) => goal.id === record.item.id)) {
+        record.item.id = uid("goal");
+      }
+      state.goals.push(record.item);
+      restoreTasksFromTrash(record.tasks);
+    } else if (record.type === "habit") {
+      if (state.habits.some((habit) => habit.id === record.item.id)) {
+        record.item.id = uid("habit");
+      }
+      state.habits.push(record.item);
+      restoreTasksFromTrash(record.tasks);
+      state.habitSkips = [
+        ...new Set([...(state.habitSkips || []), ...(record.habitSkips || [])]),
+      ];
+    } else if (record.type === "list") {
+      if (state.lists.some((list) => list.id === record.item.id)) {
+        record.item.id = uid("list");
+      }
+      state.lists.push(record.item);
+    }
+    removeTrashRecord(recordId);
+    saveState();
+    renderGoalList();
+    refreshTasksView({ animate: false });
+    if (!listsPage.hidden) renderListManagerPage();
+    if (!listDetailPage.hidden) renderListDetailPage();
+    if (!dataPage.hidden) openDataPage();
+    if (!trashPage.hidden) openTrashPage();
+    renderProfileMenuHints();
+    if (!options.silent) {
+      showToast("已从回收站恢复", {
+        undo: true,
+        onUndo: () => undoRestoredTrash(record),
+      });
+    }
+    return true;
+  }
+
+  function purgeTrashEntry(recordId) {
+    const record = (state.trash || []).find((entry) => entry.id === recordId);
+    if (!record) return;
+    removeTrashRecord(recordId);
+    saveState();
+    renderProfileMenuHints();
+    if (!trashPage.hidden) openTrashPage();
+  }
+
   // ---------- Toast ----------
-  function showToast(message) {
+  function showToast(message, options = {}) {
     window.clearTimeout(toastTimer);
-    toast.textContent = message;
+    toast.innerHTML = `<span class="toast-message">${esc(message)}</span>${
+      options.undo ? '<button class="toast-undo" type="button">撤销</button>' : ""
+    }`;
+    const undoButton = toast.querySelector(".toast-undo");
+    if (undoButton) {
+      undoButton.addEventListener("click", () => {
+        window.clearTimeout(toastTimer);
+        toast.classList.remove("is-showing");
+        options.onUndo?.();
+      });
+    }
     toast.classList.add("is-showing");
-    toastTimer = window.setTimeout(() => {
-      toast.classList.remove("is-showing");
-    }, 1900);
+    toastTimer = window.setTimeout(
+      () => {
+        toast.classList.remove("is-showing");
+      },
+      options.undo ? 5000 : 1900
+    );
   }
 
   // ---------- Navigation ----------
@@ -5015,6 +6459,7 @@
   function bindGlobalEvents() {
     document.querySelectorAll("[data-tab]").forEach((button) => {
       button.addEventListener("click", () => {
+        if (Date.now() < suppressTabClickUntil) return;
         switchTab(button.dataset.tab);
       });
     });
@@ -5384,7 +6829,10 @@
       .addEventListener("click", () => openListEditor());
     document
       .querySelector("#listsBack")
-      .addEventListener("click", () => closeSubPage("profile"));
+      .addEventListener("click", () => {
+        resetListSearch();
+        closeSubPage("profile");
+      });
     document
       .querySelector("#addListPageBtn")
       .addEventListener("click", () => openListEditor());
@@ -5409,12 +6857,28 @@
         const action = button.dataset.profileAction;
         if (action === "stats") openStatsPage("profile");
         if (action === "lists") openListManager();
+        if (action === "archive") openArchivePage();
+        if (action === "trash") openTrashPage();
         if (action === "data") openDataPage();
         if (action === "settings") openSettingsPage();
       });
     });
 
     globalSearchInput.addEventListener("input", renderGlobalSearch);
+    listSearchInput?.addEventListener("input", () => {
+      ui.listQuery = listSearchInput.value;
+      ui.searchSelected.clear();
+      clearListSearch.hidden = !ui.listQuery;
+      renderListManagerPage();
+    });
+    clearListSearch?.addEventListener("click", () => {
+      ui.listQuery = "";
+      ui.searchSelected.clear();
+      listSearchInput.value = "";
+      clearListSearch.hidden = true;
+      renderListManagerPage();
+      listSearchInput.focus();
+    });
     clearGlobalSearch.addEventListener("click", () => {
       globalSearchInput.value = "";
       renderGlobalSearch();
@@ -5436,12 +6900,14 @@
       if (!event.target.closest("[data-close-fullpage]")) return;
       const page = event.target.closest(".page--fullpage");
       if (!page) return;
+      if (page.id === "page-stats-detail") {
+        closePageTo("page-stats", "profile");
+        return;
+      }
       const tab =
         page.id === "page-goal"
           ? "create"
-          : page.id === "page-stats"
-            ? page.dataset.returnTab || "profile"
-            : "profile";
+          : page.dataset.returnTab || "profile";
       closeFullPageTo(tab);
     });
 
@@ -5509,6 +6975,10 @@
           ".page--fullpage.is-active:not([hidden])"
         );
         if (fullPage) {
+          if (fullPage.id === "page-stats-detail") {
+            closePageTo("page-stats", "profile");
+            return;
+          }
           const tab =
             fullPage.id === "page-goal"
               ? "create"
@@ -5539,17 +7009,152 @@
     }
   }
 
+  function setupTabSwipe() {
+    let start = null;
+    const canStart = (target) => {
+      if (document.body.classList.contains("keyboard-open")) return false;
+      if (!overlay.hidden || !calendarLayer.hidden) return false;
+      const page = target.closest?.(".page");
+      if (!page || !["tasks", "create", "profile"].includes(page.dataset.page)) {
+        return false;
+      }
+      if (
+        target.closest(
+          "input, textarea, select, button, .date-strip, .task-card, .segmented, .sheet, .calendar-layer"
+        )
+      ) {
+        return false;
+      }
+      return true;
+    };
+    screen.addEventListener(
+      "touchstart",
+      (event) => {
+        if (event.touches.length !== 1 || !canStart(event.target)) {
+          start = null;
+          return;
+        }
+        start = {
+          x: event.touches[0].clientX,
+          y: event.touches[0].clientY,
+          horizontal: false,
+        };
+      },
+      { passive: true }
+    );
+    screen.addEventListener(
+      "touchmove",
+      (event) => {
+        if (!start || event.touches.length !== 1) return;
+        const dx = event.touches[0].clientX - start.x;
+        const dy = event.touches[0].clientY - start.y;
+        if (!start.horizontal && Math.abs(dx) > 28 && Math.abs(dx) > Math.abs(dy) * 1.25) {
+          start.horizontal = true;
+        }
+        if (start.horizontal) event.preventDefault();
+      },
+      { passive: false }
+    );
+    screen.addEventListener(
+      "touchend",
+      (event) => {
+        if (!start) return;
+        const touch = event.changedTouches[0];
+        const dx = touch.clientX - start.x;
+        const horizontal = start.horizontal;
+        start = null;
+        if (!horizontal || Math.abs(dx) < 52) return;
+        const tabs = ["tasks", "create", "profile"];
+        const index = tabs.indexOf(ui.activeTab);
+        if (index < 0) return;
+        if (dx < 0 && index < tabs.length - 1) switchTab(tabs[index + 1]);
+        if (dx > 0 && index > 0) switchTab(tabs[index - 1]);
+      },
+      { passive: true }
+    );
+
+    let tabStart = null;
+    tabbar?.addEventListener(
+      "touchstart",
+      (event) => {
+        if (
+          event.touches.length !== 1 ||
+          !overlay.hidden ||
+          !calendarLayer.hidden ||
+          document.body.classList.contains("keyboard-open")
+        ) {
+          tabStart = null;
+          return;
+        }
+        tabStart = {
+          x: event.touches[0].clientX,
+          y: event.touches[0].clientY,
+          horizontal: false,
+        };
+      },
+      { passive: true }
+    );
+    tabbar?.addEventListener(
+      "touchmove",
+      (event) => {
+        if (!tabStart || event.touches.length !== 1) return;
+        const dx = event.touches[0].clientX - tabStart.x;
+        const dy = event.touches[0].clientY - tabStart.y;
+        if (
+          !tabStart.horizontal &&
+          Math.abs(dx) > 24 &&
+          Math.abs(dx) > Math.abs(dy) * 1.2
+        ) {
+          tabStart.horizontal = true;
+        }
+        if (tabStart.horizontal) event.preventDefault();
+      },
+      { passive: false }
+    );
+    tabbar?.addEventListener(
+      "touchend",
+      (event) => {
+        if (!tabStart) return;
+        const touch = event.changedTouches[0];
+        const dx = touch.clientX - tabStart.x;
+        const horizontal = tabStart.horizontal;
+        tabStart = null;
+        if (!horizontal || Math.abs(dx) < 48) return;
+        suppressTabClickUntil = Date.now() + 350;
+        const tabs = ["tasks", "create", "profile"];
+        const index = tabs.indexOf(ui.activeTab);
+        if (index < 0) return;
+        if (dx < 0 && index > 0) switchTab(tabs[index - 1]);
+        if (dx > 0 && index < tabs.length - 1) switchTab(tabs[index + 1]);
+      },
+      { passive: true }
+    );
+  }
+
   function init() {
     applyFontScale();
     applyTheme();
     setupThemeWatcher();
     setupKeyboardViewport();
+    setupTabSwipe();
+    document.addEventListener("gesturestart", (event) => event.preventDefault(), {
+      passive: false,
+    });
+    document.addEventListener(
+      "touchmove",
+      (event) => {
+        if (event.touches.length > 1) event.preventDefault();
+      },
+      { passive: false }
+    );
     ensureHabitTasks(ui.selectedDate);
     renderDateStrip();
     updateDateStripSelection();
     renderTaskHeader();
     renderTaskList({ animate: true });
+    bindMonthView();
     bindGlobalEvents();
+    renderProfileMenuHints();
     switchTab(initialTab, { initial: true, updateHash: false, scroll: false });
     setupNativeShell();
     requestAnimationFrame(() => {
