@@ -21,7 +21,7 @@
 
 | 任务 | 统计 |
 | --- | --- |
-| ![任务](preview.png) | ![统计](preview-stats.png) |
+| ![任务](preview.png) | ![创造](preview-create.png) |
 
 | 每日习惯 | 深色模式 |
 | --- | --- |
