@@ -695,7 +695,7 @@
       calendarLayer.hidden = true;
       calendarLayer.classList.remove("is-closing");
       calendarHost.innerHTML = "";
-    }, 240);
+    }, 300);
   }
 
   // ---------- Persisted state ----------
@@ -1285,12 +1285,12 @@
   let calendarSelectionHandler = null;
   let calendarCloseTimer = 0;
   let suppressTaskClickUntil = 0;
-  let suppressTabClickUntil = 0;
   let taskDragState = null;
+  let createPreRendered = false;
+  let createPreRenderScheduled = false;
 
   // ---------- DOM ----------
   const screen = document.querySelector("#screen");
-  const tabbar = document.querySelector(".tabbar");
   const overlay = document.querySelector("#overlay");
   const sheet = document.querySelector("#sheet");
   const dateStrip = document.querySelector("#dateStrip");
@@ -2551,37 +2551,21 @@
     return `<div class="create-empty">
       <div class="empty-visual">
         <svg viewBox="0 0 240 120" fill="none" aria-hidden="true">
-          <defs>
-            <linearGradient id="empty-line" x1="20" y1="97" x2="220" y2="28" gradientUnits="userSpaceOnUse">
-              <stop stop-color="#b9c7ff" stop-opacity=".2"/>
-              <stop offset=".48" stop-color="#7f95ff" stop-opacity=".8"/>
-              <stop offset="1" stop-color="#6f5bff"/>
-            </linearGradient>
-            <linearGradient id="empty-flag" x1="206" y1="16" x2="232" y2="42" gradientUnits="userSpaceOnUse">
-              <stop stop-color="#8b73ff"/>
-              <stop offset="1" stop-color="#4d6cf5"/>
-            </linearGradient>
-            <filter id="empty-shadow" x="-30%" y="-30%" width="160%" height="160%">
-              <feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#6078e6" flood-opacity=".18"/>
-            </filter>
-          </defs>
           <circle cx="215" cy="90" r="29" fill="#f2f4ff"/>
           <circle cx="42" cy="34" r="17" fill="#f6f7ff"/>
           <circle cx="42" cy="34" r="2.4" fill="#c3cff8"/>
           <circle cx="70" cy="25" r="1.8" fill="#d4dcf7"/>
           <circle cx="222" cy="49" r="1.6" fill="#c7d0f2"/>
-          <path d="M20 96C48 95 55 71 82 73c25 2 31 23 54 20 24-3 34-27 56-42 11-8 22-8 32-7" stroke="url(#empty-line)" stroke-width="2" stroke-linecap="round" stroke-dasharray="2 7"/>
+          <path d="M20 96C48 95 55 71 82 73c25 2 31 23 54 20 24-3 34-27 56-42 11-8 22-8 32-7" stroke="#a8b7ff" stroke-width="2" stroke-linecap="round" stroke-dasharray="2 7"/>
           <circle cx="20" cy="96" r="9" fill="#fff" stroke="#cbd6ff" stroke-width="1.5"/>
           <circle cx="20" cy="96" r="3.6" fill="#b6c5ff"/>
           <circle cx="82" cy="73" r="6.5" fill="#fff" stroke="#c4d0ff" stroke-width="1.5"/>
           <circle cx="82" cy="73" r="2.3" fill="#8ea3ff"/>
           <circle cx="136" cy="93" r="6.5" fill="#fff" stroke="#c4d0ff" stroke-width="1.5"/>
           <circle cx="136" cy="93" r="2.3" fill="#9f8dff"/>
-          <g filter="url(#empty-shadow)">
-            <rect x="201" y="13" width="4" height="44" rx="2" fill="#586fd1"/>
-            <path d="M205 18h25l-6 8 6 8h-25V18z" fill="url(#empty-flag)"/>
-            <circle cx="203" cy="16" r="3" fill="#8e9eff"/>
-          </g>
+          <rect x="201" y="13" width="4" height="44" rx="2" fill="#586fd1"/>
+          <path d="M205 18h25l-6 8 6 8h-25V18z" fill="#6f7bff"/>
+          <circle cx="203" cy="16" r="3" fill="#8e9eff"/>
           <path d="M188 58c7-4 14-5 22-3" stroke="#dfe5ff" stroke-width="2" stroke-linecap="round"/>
           <path d="M34 108h30M169 108h37" stroke="#e8ebf5" stroke-width="2" stroke-linecap="round"/>
         </svg>
@@ -3503,6 +3487,7 @@
             date: keyOf(day),
             label: `周${WEEKDAYS[day.getDay()]}`,
             action: "",
+            detail: "",
           });
         }
         plan.weeks.push({
@@ -3603,6 +3588,11 @@
       });
   }
 
+  function goalNoteWithDetail(day, baseNote) {
+    const detail = (day.detail || "").trim();
+    return detail ? `${detail}\n${baseNote}` : baseNote;
+  }
+
   function saveGoalChanges() {
     const goalId = editingGoalId;
     const goal = state.goals.find((item) => item.id === goalId);
@@ -3625,13 +3615,16 @@
       let note = "";
       if (month) {
         taskTitle = day.action || week.goal || month.goal || title;
-        note = `目标「${title}」· ${month.label} · ${week.label}`;
+        note = goalNoteWithDetail(
+          day,
+          `目标「${title}」· ${month.label} · ${week.label}`
+        );
       } else if (week) {
         taskTitle = day.action || week.goal || title;
-        note = `目标「${title}」· ${week.label}`;
+        note = goalNoteWithDetail(day, `目标「${title}」· ${week.label}`);
       } else {
         taskTitle = day.action || title;
-        note = `目标「${title}」· ${day.label}`;
+        note = goalNoteWithDetail(day, `目标「${title}」· ${day.label}`);
       }
       nodes.set(day.id, {
         title: taskTitle,
@@ -3783,6 +3776,7 @@
             date: keyOf(dayCursor),
             label: `周${WEEKDAYS[dayCursor.getDay()]}`,
             action: "",
+            detail: "",
           });
           dayCursor = addDaysDate(dayCursor, 1);
         }
@@ -3843,6 +3837,7 @@
           date: keyOf(day),
           label: `周${WEEKDAYS[day.getDay()]}`,
           action: "",
+          detail: "",
         });
       }
       weeks.push({
@@ -3874,6 +3869,7 @@
         date: keyOf(day),
         label: `周${WEEKDAYS[day.getDay()]}`,
         action: "",
+        detail: "",
       });
     }
     return {
@@ -4213,12 +4209,28 @@
     const shortDate = formatShortDate(day.date)
       .replace("月", "/")
       .replace("日", "");
-    return `<label class="day-field">
-      <span>${day.label} <b>${shortDate}</b></span>
-      <input type="text" data-day-id="${day.id}" value="${esc(
-        day.action
-      )}" placeholder="${placeholder}" maxlength="80">
-    </label>`;
+    const detail = (day.detail || "").trim();
+    return `<div class="day-field" data-day-field="${day.id}">
+      <span class="day-field-label">${day.label} <b>${shortDate}</b></span>
+      <div class="day-field-main">
+        <div class="day-action-row">
+          <input type="text" data-day-id="${day.id}" value="${esc(
+            day.action
+          )}" placeholder="${placeholder}" maxlength="80">
+          <button class="day-detail-toggle ${detail ? "is-open" : ""}" type="button"
+            data-day-detail-toggle="${day.id}" aria-expanded="${Boolean(detail)}">
+            ${detail ? "收起" : "＋详细"}
+          </button>
+        </div>
+        <div class="day-detail-panel ${detail ? "is-open" : ""}" data-day-detail-panel="${day.id}"
+          ${detail ? "" : "inert"} aria-hidden="${detail ? "false" : "true"}">
+          <div class="day-detail-inner">
+            <textarea class="day-detail-input" data-day-detail="${day.id}" rows="2"
+              maxlength="200" placeholder="任务详细（可选）">${esc(day.detail || "")}</textarea>
+          </div>
+        </div>
+      </div>
+    </div>`;
   }
 
   function weekPanelHTML(week, open, fallbackLabel) {
@@ -4261,6 +4273,10 @@
     week.days.forEach((day) => {
       const dayInput = goalPage.querySelector(`[data-day-id="${day.id}"]`);
       if (dayInput) day.action = dayInput.value.trim();
+      const detailInput = goalPage.querySelector(
+        `[data-day-detail="${day.id}"]`
+      );
+      if (detailInput) day.detail = detailInput.value.trim();
     });
   }
 
@@ -4279,6 +4295,10 @@
       plan.days.forEach((day) => {
         const dayInput = goalPage.querySelector(`[data-day-id="${day.id}"]`);
         if (dayInput) day.action = dayInput.value.trim();
+        const detailInput = goalPage.querySelector(
+          `[data-day-detail="${day.id}"]`
+        );
+        if (detailInput) day.detail = detailInput.value.trim();
       });
     }
     return plan;
@@ -4559,6 +4579,22 @@
         }
       });
     });
+    goalPage.querySelectorAll("[data-day-detail-toggle]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const dayId = button.dataset.dayDetailToggle;
+        const panel = goalPage.querySelector(
+          `[data-day-detail-panel="${dayId}"]`
+        );
+        if (!panel) return;
+        const open = !panel.classList.contains("is-open");
+        panel.classList.toggle("is-open", open);
+        panel.inert = !open;
+        panel.setAttribute("aria-hidden", String(!open));
+        button.classList.toggle("is-open", open);
+        button.setAttribute("aria-expanded", String(open));
+        button.textContent = open ? "收起" : "＋详细";
+      });
+    });
     goalPage.scrollTo({ top: 0, behavior: "auto" });
   }
 
@@ -4619,7 +4655,10 @@
             specs.push({
               title: day.action || week.goal || month.goal || title,
               date: day.date,
-              note: `目标「${title}」· ${month.label} · ${week.label}`,
+              note: goalNoteWithDetail(
+                day,
+                `目标「${title}」· ${month.label} · ${week.label}`
+              ),
               planDayId: day.id,
             });
           });
@@ -4631,7 +4670,7 @@
           specs.push({
             title: day.action || week.goal || title,
             date: day.date,
-            note: `目标「${title}」· ${week.label}`,
+            note: goalNoteWithDetail(day, `目标「${title}」· ${week.label}`),
             planDayId: day.id,
           });
         });
@@ -4641,7 +4680,7 @@
         specs.push({
           title: day.action || title,
           date: day.date,
-          note: `目标「${title}」· ${day.label}`,
+          note: goalNoteWithDetail(day, `目标「${title}」· ${day.label}`),
           planDayId: day.id,
         });
       });
@@ -5831,7 +5870,7 @@
             <li><b>创造</b>：创建目标和每日习惯</li>
             <li><b>我的</b>：统计、清单、数据和设置</li>
           </ul>
-          <p>三个主页面可以直接左右滑动切换。</p>
+          <p>点击底部三个菜单切换主页面。</p>
         </section>
 
         <section class="guide-section">
@@ -5852,6 +5891,7 @@
           <ul>
             <li>目标支持按天、周、月创建，可选择开始日期和周期。</li>
             <li>系统会把目标拆成每日行动，并同步到任务清单。</li>
+            <li>拆解时每天可以展开「详细」，填写任务详细；同步后会作为任务备注。</li>
             <li>点击目标卡片的日历图标可以修改目标颜色。</li>
             <li>点击「查看拆解」查看每周或每天的行动。</li>
             <li>目标菜单支持编辑、暂停、追赶未完成行动和删除。</li>
@@ -5901,7 +5941,6 @@
             <li>日期条可以左右拖动。</li>
             <li>日期选择日历可以左右滑动切换月份。</li>
             <li>任务三点长按拖动排序。</li>
-            <li>页面已禁用双指缩放，避免误触。</li>
             <li>设置中可以调整字体大小、深色模式和子任务开关。</li>
             <li>深色模式默认跟随系统，也可以手动切换。</li>
           </ul>
@@ -5915,6 +5954,7 @@
             <li>Android 覆盖安装不会清除应用数据。</li>
           </ul>
         </section>
+        <p class="guide-link"><a href="https://github.com/kccQM/qinglist" target="_blank" rel="noopener">GitHub：https://github.com/kccQM/qinglist</a></p>
       </div>
     </div>`;
     openFullPage("page-guide", "profile");
@@ -5962,7 +6002,7 @@
               <span class="settings-toggle-chevron">${ICONS.chevron}</span>
             </button>
           </div>
-          <div class="settings-about">轻清单 1.13.10</div>
+          <div class="settings-about">轻清单 1.13.11</div>
         </div>
       </div>`;
 
@@ -6058,7 +6098,7 @@
       sheet.innerHTML = "";
       sheet.className = "sheet";
       document.body.classList.remove("sheet-open");
-    }, 260);
+    }, 320);
   }
 
   // ---------- Trash / undo ----------
@@ -6327,8 +6367,8 @@
       pageSettleTimer = window.setTimeout(() => {
         if (token !== pageTransitionToken) return;
         target.classList.remove("is-page-settling");
-      }, 120);
-    }, 260);
+      }, 340);
+    }, 340);
   }
 
   function openFullPage(pageId, tab, render) {
@@ -6410,7 +6450,28 @@
 
   function renderTabRoot(tab) {
     if (tab === "tasks") refreshTasksView({ animate: false });
-    if (tab === "create") renderGoalList();
+    if (tab === "create" && !createPreRendered) {
+      renderGoalList();
+      createPreRendered = true;
+    }
+  }
+
+  function scheduleCreatePreRender() {
+    if (createPreRendered || createPreRenderScheduled) return;
+    createPreRenderScheduled = true;
+    const run = () => {
+      createPreRenderScheduled = false;
+      if (createPreRendered || ui.activeTab === "create") return;
+      renderGoalList();
+      createPreRendered = true;
+    };
+    window.setTimeout(() => {
+      if ("requestIdleCallback" in window) {
+        window.requestIdleCallback(run, { timeout: 800 });
+      } else {
+        run();
+      }
+    }, 120);
   }
 
   function switchTab(tab, options = {}) {
@@ -6459,7 +6520,6 @@
   function bindGlobalEvents() {
     document.querySelectorAll("[data-tab]").forEach((button) => {
       button.addEventListener("click", () => {
-        if (Date.now() < suppressTabClickUntil) return;
         switchTab(button.dataset.tab);
       });
     });
@@ -7009,134 +7069,11 @@
     }
   }
 
-  function setupTabSwipe() {
-    let start = null;
-    const canStart = (target) => {
-      if (document.body.classList.contains("keyboard-open")) return false;
-      if (!overlay.hidden || !calendarLayer.hidden) return false;
-      const page = target.closest?.(".page");
-      if (!page || !["tasks", "create", "profile"].includes(page.dataset.page)) {
-        return false;
-      }
-      if (
-        target.closest(
-          "input, textarea, select, button, .date-strip, .task-card, .segmented, .sheet, .calendar-layer"
-        )
-      ) {
-        return false;
-      }
-      return true;
-    };
-    screen.addEventListener(
-      "touchstart",
-      (event) => {
-        if (event.touches.length !== 1 || !canStart(event.target)) {
-          start = null;
-          return;
-        }
-        start = {
-          x: event.touches[0].clientX,
-          y: event.touches[0].clientY,
-          horizontal: false,
-        };
-      },
-      { passive: true }
-    );
-    screen.addEventListener(
-      "touchmove",
-      (event) => {
-        if (!start || event.touches.length !== 1) return;
-        const dx = event.touches[0].clientX - start.x;
-        const dy = event.touches[0].clientY - start.y;
-        if (!start.horizontal && Math.abs(dx) > 28 && Math.abs(dx) > Math.abs(dy) * 1.25) {
-          start.horizontal = true;
-        }
-        if (start.horizontal) event.preventDefault();
-      },
-      { passive: false }
-    );
-    screen.addEventListener(
-      "touchend",
-      (event) => {
-        if (!start) return;
-        const touch = event.changedTouches[0];
-        const dx = touch.clientX - start.x;
-        const horizontal = start.horizontal;
-        start = null;
-        if (!horizontal || Math.abs(dx) < 52) return;
-        const tabs = ["tasks", "create", "profile"];
-        const index = tabs.indexOf(ui.activeTab);
-        if (index < 0) return;
-        if (dx < 0 && index < tabs.length - 1) switchTab(tabs[index + 1]);
-        if (dx > 0 && index > 0) switchTab(tabs[index - 1]);
-      },
-      { passive: true }
-    );
-
-    let tabStart = null;
-    tabbar?.addEventListener(
-      "touchstart",
-      (event) => {
-        if (
-          event.touches.length !== 1 ||
-          !overlay.hidden ||
-          !calendarLayer.hidden ||
-          document.body.classList.contains("keyboard-open")
-        ) {
-          tabStart = null;
-          return;
-        }
-        tabStart = {
-          x: event.touches[0].clientX,
-          y: event.touches[0].clientY,
-          horizontal: false,
-        };
-      },
-      { passive: true }
-    );
-    tabbar?.addEventListener(
-      "touchmove",
-      (event) => {
-        if (!tabStart || event.touches.length !== 1) return;
-        const dx = event.touches[0].clientX - tabStart.x;
-        const dy = event.touches[0].clientY - tabStart.y;
-        if (
-          !tabStart.horizontal &&
-          Math.abs(dx) > 24 &&
-          Math.abs(dx) > Math.abs(dy) * 1.2
-        ) {
-          tabStart.horizontal = true;
-        }
-        if (tabStart.horizontal) event.preventDefault();
-      },
-      { passive: false }
-    );
-    tabbar?.addEventListener(
-      "touchend",
-      (event) => {
-        if (!tabStart) return;
-        const touch = event.changedTouches[0];
-        const dx = touch.clientX - tabStart.x;
-        const horizontal = tabStart.horizontal;
-        tabStart = null;
-        if (!horizontal || Math.abs(dx) < 48) return;
-        suppressTabClickUntil = Date.now() + 350;
-        const tabs = ["tasks", "create", "profile"];
-        const index = tabs.indexOf(ui.activeTab);
-        if (index < 0) return;
-        if (dx < 0 && index > 0) switchTab(tabs[index - 1]);
-        if (dx > 0 && index < tabs.length - 1) switchTab(tabs[index + 1]);
-      },
-      { passive: true }
-    );
-  }
-
   function init() {
     applyFontScale();
     applyTheme();
     setupThemeWatcher();
     setupKeyboardViewport();
-    setupTabSwipe();
     document.addEventListener("gesturestart", (event) => event.preventDefault(), {
       passive: false,
     });
@@ -7159,6 +7096,7 @@
     setupNativeShell();
     requestAnimationFrame(() => {
       scrollSelectedDate(false);
+      requestAnimationFrame(scheduleCreatePreRender);
     });
   }
 

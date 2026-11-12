@@ -8191,3 +8191,177 @@ html[data-theme="dark"] .stats-detail-row-head { color: var(--ink-soft); }
 html[data-theme="dark"] .reminder-sound-row { border-color: var(--line); background: #151c28; color: var(--ink); }
 html[data-theme="dark"] .reminder-sound-row.is-selected { border-color: var(--accent); background: #1b2540; }
 .stats-detail-content .stats-empty { margin-top: 13px; }
+/* ---------- Slower motion pacing ---------- */
+:root {
+  --duration-fast: 190ms;
+  --duration-medium: 330ms;
+  --duration-slow: 460ms;
+}
+
+.page.is-tab-entering { animation-duration: 0.44s; }
+.page.is-underlay.is-page-settling,
+.page.is-page-settling { transition-duration: 0.46s; }
+.page.is-fading { transition-duration: 0.34s; }
+.page.is-leaving { animation-duration: 0.3s; }
+.overlay-scrim { transition-duration: 0.34s; }
+.overlay.is-closing .sheet { animation-duration: 0.28s; }
+.calendar-layer .calendar-scrim { transition-duration: 0.3s; }
+.calendar-layer.is-closing .calendar-dialog { animation-duration: 0.3s; }
+.calendar-layer.is-open .calendar-dialog { animation-duration: 0.28s; }
+.task-inline-detail {
+  transition:
+    grid-template-rows 0.5s var(--ease-emphasized),
+    opacity 0.34s var(--ease);
+}
+.goal-plan { animation-duration: 0.42s; }
+
+/* ---------- Goal breakdown: daily task details ---------- */
+.day-field {
+  align-items: start;
+}
+
+.day-field-label {
+  padding-top: 7px;
+}
+
+.day-field-main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.day-action-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.day-action-row > input {
+  flex: 1;
+  min-width: 0;
+}
+
+.day-detail-toggle {
+  flex: 0 0 auto;
+  min-height: 29px;
+  padding: 0 7px;
+  border: 1px solid #e9edf5;
+  border-radius: 7px;
+  color: #8c98ad;
+  background: #fff;
+  font-size: calc(8px * var(--font-scale));
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.day-detail-toggle.is-open {
+  color: var(--accent);
+  border-color: rgba(79, 110, 247, 0.22);
+  background: var(--accent-soft);
+}
+
+.day-detail-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 0.36s var(--ease-emphasized),
+    opacity 0.28s var(--ease);
+}
+
+.day-detail-panel.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.day-detail-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.day-detail-input {
+  width: 100%;
+  min-height: 46px;
+  margin-top: 4px;
+  padding: 7px 8px;
+  border: 1px solid #e9edf5;
+  border-radius: 7px;
+  outline: 0;
+  color: #5d697e;
+  background: #fff;
+  font: inherit;
+  font-size: calc(8.5px * var(--font-scale));
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.day-detail-input:focus {
+  border-color: rgba(79, 110, 247, 0.3);
+  box-shadow: 0 0 0 2px rgba(79, 110, 247, 0.05);
+}
+
+/* ---------- Goal breakdown: week panel expansion ---------- */
+.week-panel[open] > .week-panel-body {
+  animation: week-detail-in 0.42s var(--ease-emphasized) both;
+  transform-origin: top;
+}
+
+@keyframes week-detail-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+html[data-theme="dark"] .day-detail-toggle {
+  border-color: var(--line);
+  color: var(--muted);
+  background: #202a3b;
+}
+
+html[data-theme="dark"] .day-detail-toggle.is-open {
+  border-color: rgba(111, 134, 255, 0.35);
+  color: #b8c6ff;
+  background: #1b2540;
+}
+
+html[data-theme="dark"] .day-detail-input {
+  border-color: var(--line);
+  color: var(--ink-soft);
+  background: #202a3b;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .day-detail-panel,
+  .week-panel[open] > .week-panel-body {
+    animation: none;
+    transition: none;
+  }
+}
+.page.is-underlay.is-page-settling,
+.page.is-page-settling { transition-duration: 0.32s; }
+.guide-link {
+  margin: 24px 2px 6px;
+  padding-top: 15px;
+  border-top: 1px solid #edf1f7;
+}
+
+.guide-link a {
+  color: var(--accent);
+  font-size: calc(9.5px * var(--font-scale));
+  line-height: 1.6;
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.guide-link a:active {
+  opacity: 0.65;
+}
+
+html[data-theme="dark"] .guide-link {
+  border-top-color: var(--line);
+}
