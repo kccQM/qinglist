@@ -5487,6 +5487,22 @@
     const fileName = `qinglist-backup-${todayKey()}.json`;
 
     if (isNativeApp()) {
+      const exporter = nativePlugins().FileExport;
+      if (exporter?.save) {
+        try {
+          await exporter.save({ fileName, data: json });
+          showToast("备份已保存");
+          return;
+        } catch (error) {
+          const message = String(error?.message || error || "");
+          if (/cancel/i.test(message)) {
+            showToast("已取消导出");
+            return;
+          }
+          console.warn("选择导出位置失败，尝试系统分享。", error);
+        }
+      }
+
       const { Filesystem, Share } = nativePlugins();
       if (Filesystem && Share) {
         try {
@@ -5514,6 +5530,28 @@
       }
     }
 
+    if (typeof window.showSaveFilePicker === "function") {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: fileName,
+          types: [
+            {
+              description: "JSON 备份",
+              accept: { "application/json": [".json"] },
+            },
+          ],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(json);
+        await writable.close();
+        showToast("备份已导出");
+        return;
+      } catch (error) {
+        if (error?.name === "AbortError") return;
+        console.warn("浏览器保存位置选择失败，使用下载。", error);
+      }
+    }
+
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -5526,32 +5564,170 @@
     showToast("备份已导出");
   }
 
+  function mergeImportedState(imported) {
+    const before = {
+      tasks: state.tasks.length,
+      goals: state.goals.length,
+      habits: state.habits.length,
+    };
+    const listIdMap = new Map();
+    imported.lists.forEach((list) => {
+      const sameId = state.lists.find((item) => item.id === list.id);
+      const sameName = state.lists.find((item) => item.name === list.name);
+      if (sameId) {
+        listIdMap.set(list.id, sameId.id);
+      } else if (sameName) {
+        listIdMap.set(list.id, sameName.id);
+      } else {
+        state.lists.push({ ...list });
+        listIdMap.set(list.id, list.id);
+      }
+    });
+
+    const remapList = (item) => {
+      const mapped = listIdMap.get(item.listId);
+      return mapped ? { ...item, listId: mapped } : item;
+    };
+
+    const goalIds = new Set(state.goals.map((goal) => goal.id));
+    imported.goals.forEach((goal) => {
+      if (goalIds.has(goal.id)) return;
+      state.goals.push(remapList(goal));
+      goalIds.add(goal.id);
+    });
+
+    const habitIds = new Set(state.habits.map((habit) => habit.id));
+    imported.habits.forEach((habit) => {
+      if (habitIds.has(habit.id)) return;
+      state.habits.push(remapList(habit));
+      habitIds.add(habit.id);
+    });
+
+    const taskIds = new Set(state.tasks.map((task) => task.id));
+    const habitKeys = new Set();
+    const seriesKeys = new Set();
+    const goalKeys = new Set();
+    const titleKeys = new Set();
+
+    const rememberTask = (task) => {
+      if (task.id) taskIds.add(task.id);
+      if (task.habitId) habitKeys.add(`${task.habitId}:${task.date}`);
+      if (task.repeat?.seriesId) {
+        seriesKeys.add(`${task.repeat.seriesId}:${task.date}`);
+      }
+      if (task.goalId) {
+        goalKeys.add(
+          task.planDayId
+            ? `${task.goalId}:${task.planDayId}`
+            : `${task.goalId}:${task.date}:${task.title.trim()}`
+        );
+      }
+      if (!task.goalId && !task.habitId && !task.repeat) {
+        titleKeys.add(`${task.title.trim()}:${task.date}:${task.listId}`);
+      }
+    };
+
+    state.tasks.forEach(rememberTask);
+    imported.tasks.forEach((task) => {
+      const copy = remapList({
+        ...task,
+        id: task.id || uid("task"),
+      });
+      if (taskIds.has(copy.id)) return;
+      if (copy.habitId && habitKeys.has(`${copy.habitId}:${copy.date}`)) {
+        return;
+      }
+      if (
+        copy.repeat?.seriesId &&
+        seriesKeys.has(`${copy.repeat.seriesId}:${copy.date}`)
+      ) {
+        return;
+      }
+      if (
+        copy.goalId &&
+        goalKeys.has(
+          copy.planDayId
+            ? `${copy.goalId}:${copy.planDayId}`
+            : `${copy.goalId}:${copy.date}:${copy.title.trim()}`
+        )
+      ) {
+        return;
+      }
+      if (
+        !copy.goalId &&
+        !copy.habitId &&
+        !copy.repeat &&
+        titleKeys.has(`${copy.title.trim()}:${copy.date}:${copy.listId}`)
+      ) {
+        return;
+      }
+      state.tasks.push(copy);
+      rememberTask(copy);
+    });
+
+    state.habitSkips = [
+      ...new Set([...(state.habitSkips || []), ...(imported.habitSkips || [])]),
+    ].slice(-500);
+
+    const trashIds = new Set((state.trash || []).map((entry) => entry.id));
+    (imported.trash || []).forEach((entry) => {
+      if (!entry.id || trashIds.has(entry.id)) return;
+      state.trash.push(entry);
+      trashIds.add(entry.id);
+    });
+    state.trash = (state.trash || []).slice(0, 100);
+
+    return {
+      tasks: state.tasks.length - before.tasks,
+      goals: state.goals.length - before.goals,
+      habits: state.habits.length - before.habits,
+    };
+  }
+
   function openImportConfirm(imported) {
     openSheet(
       `<div class="confirm-sheet">
         <div class="sheet-grab"></div>
         <div class="confirm-icon confirm-icon--import">${ICONS.upload}</div>
-        <h2>导入这份备份？</h2>
-        <p>备份包含 ${imported.tasks.length} 个任务、${
-        imported.goals.length
-      } 个目标和 ${
-        imported.lists.length
-      } 个清单。导入后会替换当前数据，这个操作不能撤销。</p>
-        <div class="confirm-actions">
-          <button class="btn-primary" type="button" id="confirmImportData">导入并替换</button>
-          <button class="confirm-cancel" type="button" data-close-sheet>取消</button>
+        <h2>选择导入方式</h2>
+        <p>备份包含 ${imported.tasks.length} 个任务、${imported.goals.length} 个目标、${imported.habits.length} 个习惯和 ${imported.lists.length} 个清单。</p>
+        <div class="import-mode-list">
+          <button class="import-mode-button" type="button" id="mergeImportData">
+            <strong>合并导入</strong>
+            <small>保留当前数据，只补充备份中的任务、目标、习惯和清单</small>
+          </button>
+          <button class="import-mode-button import-mode-button--danger" type="button" id="overwriteImportData">
+            <strong>覆盖导入</strong>
+            <small>用备份替换当前全部数据</small>
+          </button>
         </div>
+        <button class="confirm-cancel" type="button" data-close-sheet>取消</button>
       </div>`,
-      { className: "sheet--action", label: "确认导入数据" }
+      { className: "sheet--action", label: "选择导入方式" }
     );
 
-    document.querySelector("#confirmImportData").addEventListener("click", () => {
+    document.querySelector("#mergeImportData").addEventListener("click", () => {
+      const added = mergeImportedState(imported);
+      saveState();
+      closeSheet();
+      refreshTasksView({ animate: false });
+      renderGoalList();
+      renderHabitList();
+      renderProfileMenuHints();
+      if (!dataPage.hidden) openDataPage();
+      showToast(
+        `合并完成：新增 ${added.tasks} 个任务、${added.goals} 个目标、${added.habits} 个习惯`
+      );
+    });
+
+    document.querySelector("#overwriteImportData").addEventListener("click", () => {
       state.tasks = imported.tasks;
       state.goals = imported.goals;
       state.habits = imported.habits;
       state.habitSkips = imported.habitSkips;
       state.lists = imported.lists;
       state.settings = imported.settings;
+      state.trash = imported.trash;
       saveState();
       closeSheet();
       window.location.reload();
@@ -5638,12 +5814,12 @@
           <div class="data-actions">
             <button class="data-action" type="button" id="exportDataBtn">
               <span class="data-action-icon data-action-icon--export">${ICONS.download}</span>
-              <span class="data-action-copy"><strong>导出备份</strong><small>保存为 JSON 文件</small></span>
+              <span class="data-action-copy"><strong>导出备份</strong><small>选择保存位置</small></span>
               ${ICONS.chevron}
             </button>
             <button class="data-action" type="button" id="importDataBtn">
               <span class="data-action-icon data-action-icon--import">${ICONS.upload}</span>
-              <span class="data-action-copy"><strong>导入备份</strong><small>用 JSON 文件恢复数据</small></span>
+              <span class="data-action-copy"><strong>导入备份</strong><small>合并或覆盖现有数据</small></span>
               ${ICONS.chevron}
             </button>
             <button class="data-action" type="button" id="dataArchiveBtn">
@@ -5928,7 +6104,10 @@
           <h2>数据、归档与回收站</h2>
           <ul>
             <li>数据页支持导出 JSON 备份和导入恢复。</li>
-            <li>导入会替换当前数据，建议先导出备份。</li>
+            <li>导出时可以选择保存位置。</li>
+            <li>导入时可以选择合并或覆盖；合并会保留现有数据，覆盖会替换全部数据。</li>
+            <li>备份包含任务、目标、习惯、清单和回收站。</li>
+            <li>覆盖导入前建议先导出备份。</li>
             <li>已归档页面保存暂停的目标。</li>
             <li>回收站保存删除的任务、目标、习惯和清单，可恢复或永久删除。</li>
             <li>清空回收站后无法恢复。</li>
@@ -6002,7 +6181,7 @@
               <span class="settings-toggle-chevron">${ICONS.chevron}</span>
             </button>
           </div>
-          <div class="settings-about">轻清单 1.13.11</div>
+          <div class="settings-about">轻清单 1.13.12</div>
         </div>
       </div>`;
 

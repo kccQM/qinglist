@@ -13,6 +13,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
+        registerPlugin(FileExportPlugin.class);
         super.onCreate(savedInstanceState);
 
         int background = ContextCompat.getColor(this, R.color.appBackground);
